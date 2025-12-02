@@ -2600,17 +2600,24 @@ function REQUIRED_SAVINGS_RATE(currentAge, retirementAge, currentSavings, target
  * SECTION 24 – Enhanced CPP Benefit (Post-2019 Enhancement)
  * ----------------------------------------------------------------------
  *
- * Calculates CPP including the enhanced portion for contributions after 2019.
- * The enhancement provides up to 33% more retirement income for those who
- * contribute after 2019.
+ * The CPP enhancement increases the base replacement rate from 25% to 33.33%
+ * of average earnings up to the YMPE, and adds a second tier (YAMPE) covering
+ * earnings between 100% and 114% of YMPE with an additional 8.33% replacement rate.
+ * The enhancement is phased in for contributions after 2019 and only applies to those years.
  */
 
 /**
  * CPP_ENHANCED_BENEFIT
  *
  * Calculates CPP including the enhanced portion for contributions after 2019.
- * The enhancement provides up to 33% more retirement income for those who
- * contribute after 2019.
+ * The CPP enhancement increases the replacement rate from 25% to 33.33% of 
+ * average earnings up to the YMPE, and adds a second tier (YAMPE) for earnings 
+ * between 100% and 114% of YMPE with an additional 8.33% replacement rate.
+ * The enhancement only applies to contributions made after 2019.
+ *
+ * Note: This is a simplified estimate. The actual CPP enhancement calculation
+ * is complex and depends on your specific earnings history. For accurate 
+ * estimates, use your My Service Canada Account statement.
  *
  * @param {number} averageEarnings    Average annual pensionable earnings
  * @param {number} contributionYears  Total years with CPP contributions
@@ -2641,54 +2648,180 @@ function CPP_ENHANCED_BENEFIT(averageEarnings, contributionYears, yearsAfter2019
     return "ERROR: startAge must be between 60 and 70";
   }
 
-  // Get base CPP benefit
-  var baseBenefit = CPP_BENEFIT(averageEarnings, contributionYears, startAge);
-  if (typeof baseBenefit === 'string') {
-    return baseBenefit;
-  }
+  // Cap contribution years
+  var effectiveYears = Math.min(contributionYears, CPP_2024.CONTRIBUTION_YEARS_FOR_MAX);
+  var yearsRatio = effectiveYears / CPP_2024.CONTRIBUTION_YEARS_FOR_MAX;
 
-  // Enhanced CPP calculation
-  // The enhancement phases in over 40 years (2019-2059)
-  // At full phase-in, enhancement provides up to 33% more income
-  // Enhancement replacement rate: 33.33% vs base 25%
-  // Additional enhancement: (33.33 - 25) / 25 = 33.32% more
+  // Enhanced CPP calculation - phases in over 40 years (2019-2059)
   var maxEnhancementYears = 40;
   var effectiveEnhancementYears = Math.min(yearsAfter2019, maxEnhancementYears);
   var enhancementPhaseIn = effectiveEnhancementYears / maxEnhancementYears;
 
-  // The enhancement can add up to 33% more income at full phase-in
-  // Proportional to years of enhanced contributions
-  var maxEnhancementRate = 0.3332; // 33.32% additional at full phase-in
-  var enhancementRate = maxEnhancementRate * enhancementPhaseIn;
+  // Calculate base CPP (25% replacement rate on earnings up to YMPE)
+  var earningsUpToYMPE = Math.min(averageEarnings, CPP_2024.YMPE);
+  var baseReplacementRate = 0.25;
+  var baseBenefitAt65 = (earningsUpToYMPE / 12) * baseReplacementRate * yearsRatio;
 
-  // Enhancement is based on earnings above the base YMPE
-  // For simplicity, we apply the enhancement proportionally to the base benefit
-  var enhancedBenefit = baseBenefit * (1 + enhancementRate);
+  // Enhanced portion: additional 8.33% (33.33% - 25%) on earnings up to YMPE
+  // Only applies proportionally to years after 2019
+  var enhancementRate = 0.0833 * enhancementPhaseIn;
+  var enhancedPortion = (earningsUpToYMPE / 12) * enhancementRate * yearsRatio;
 
-  return Math.round(enhancedBenefit * 100) / 100;
+  // Second tier (YAMPE): 8.33% on earnings between YMPE and YAMPE (114% of YMPE)
+  // This only applies to contributions after 2019
+  var YAMPE = CPP_2024.YMPE * 1.14;
+  var earningsInSecondTier = Math.min(Math.max(0, averageEarnings - CPP_2024.YMPE), YAMPE - CPP_2024.YMPE);
+  var secondTierRate = 0.0833 * enhancementPhaseIn;
+  var secondTierPortion = (earningsInSecondTier / 12) * secondTierRate * yearsRatio;
+
+  // Total benefit at age 65
+  var totalBenefitAt65 = baseBenefitAt65 + enhancedPortion + secondTierPortion;
+
+  // Apply start age adjustment
+  var monthsFromNormal = (startAge - CPP_2024.NORMAL_AGE) * 12;
+  var adjustment;
+  if (monthsFromNormal < 0) {
+    // Early (before 65): reduce by 0.6% per month
+    adjustment = 1 + (monthsFromNormal * CPP_2024.EARLY_REDUCTION_PER_MONTH);
+  } else if (monthsFromNormal > 0) {
+    // Late (after 65): increase by 0.7% per month
+    adjustment = 1 + (monthsFromNormal * CPP_2024.LATE_INCREASE_PER_MONTH);
+  } else {
+    adjustment = 1;
+  }
+
+  var monthlyBenefit = totalBenefitAt65 * adjustment;
+
+  return Math.round(monthlyBenefit * 100) / 100;
 }
 
 
 /**
  * ----------------------------------------------------------------------
- * SECTION 25 – Safe Withdrawal Rate Calculator
+ * SECTION 25 – Withdrawal Schedule Calculator
  * ----------------------------------------------------------------------
  *
- * Calculates sustainable withdrawal based on the 4% rule adjusted
- * for Canadian context.
+ * Projects portfolio withdrawals over time with inflation adjustments
+ * and tracks remaining portfolio balance.
  */
 
 /**
- * SAFE_WITHDRAWAL_RATE
+ * WITHDRAWAL_SCHEDULE
  *
- * Calculates sustainable withdrawal based on the 4% rule adjusted
- * for Canadian context.
+ * Projects year-by-year withdrawals from a portfolio, tracking both
+ * the withdrawal amounts (adjusted for inflation) and remaining 
+ * portfolio balance. Helps visualize the sustainability of your
+ * withdrawal strategy.
+ *
+ * @param {number} portfolioValue   Current portfolio value
+ * @param {number} withdrawalRate   Initial annual withdrawal rate (e.g., 0.04 for 4%)
+ * @param {number} inflationRate    Expected inflation rate
+ * @param {number} nominalReturn    Expected nominal investment return
+ * @param {number} years            Number of years to project
+ * @return {Array[]} Year-by-year schedule with withdrawals and portfolio balance
+ *
+ * Example:
+ * =WITHDRAWAL_SCHEDULE(1000000, 0.04, 0.02, 0.06, 30)
+ */
+function WITHDRAWAL_SCHEDULE(portfolioValue, withdrawalRate, inflationRate, nominalReturn, years) {
+  portfolioValue = Number(portfolioValue);
+  withdrawalRate = Number(withdrawalRate);
+  inflationRate  = Number(inflationRate);
+  nominalReturn  = Number(nominalReturn) || 0.05;
+  years          = Number(years);
+
+  // Input validation
+  if (portfolioValue <= 0) {
+    return [["ERROR: portfolioValue must be > 0"]];
+  }
+  if (withdrawalRate <= 0 || withdrawalRate > 1) {
+    return [["ERROR: withdrawalRate must be between 0 and 1"]];
+  }
+  if (years <= 0) {
+    return [["ERROR: years must be > 0"]];
+  }
+
+  var realReturn = realReturn_(nominalReturn, inflationRate);
+  var results = [["Year", "Withdrawal", "Portfolio Start", "Portfolio End", "Sustainable?"]];
+
+  var initialWithdrawal = portfolioValue * withdrawalRate;
+  var balance = portfolioValue;
+  var depleted = false;
+  var depletionYear = 0;
+
+  for (var year = 1; year <= years; year++) {
+    var portfolioStart = balance;
+    
+    // Withdrawal increases with inflation to maintain purchasing power
+    var withdrawal = initialWithdrawal * Math.pow(1 + inflationRate, year - 1);
+    
+    // Check if portfolio is depleted
+    if (balance <= 0 || depleted) {
+      if (!depleted) {
+        depletionYear = year;
+        depleted = true;
+      }
+      results.push([
+        year,
+        0,
+        0,
+        0,
+        "DEPLETED in year " + depletionYear
+      ]);
+      continue;
+    }
+
+    // Withdraw at start of year
+    var actualWithdrawal = Math.min(withdrawal, balance);
+    balance -= actualWithdrawal;
+
+    // Apply investment return on remaining balance
+    balance = balance * (1 + nominalReturn);
+
+    var sustainable = balance > 0 ? "Yes" : "No - depleted";
+    if (balance > portfolioValue) {
+      sustainable = "Yes - growing";
+    }
+
+    results.push([
+      year,
+      Math.round(actualWithdrawal),
+      Math.round(portfolioStart),
+      Math.round(balance),
+      sustainable
+    ]);
+
+    if (balance <= 0) {
+      depleted = true;
+      depletionYear = year;
+    }
+  }
+
+  // Add summary
+  results.push(["", "", "", "", ""]);
+  if (depleted) {
+    results.push(["WARNING:", "Portfolio depletes in year " + depletionYear, "", "", ""]);
+    results.push(["Suggestion:", "Reduce withdrawal rate or increase returns", "", "", ""]);
+  } else {
+    results.push(["SUCCESS:", "Portfolio sustainable for " + years + " years", "", "", ""]);
+    results.push(["Final Balance:", "$" + Math.round(balance).toLocaleString(), "", "", ""]);
+  }
+
+  return results;
+}
+
+/**
+ * SAFE_WITHDRAWAL_RATE (Deprecated - use WITHDRAWAL_SCHEDULE instead)
+ *
+ * Simple inflation-adjusted withdrawal schedule. Does not track portfolio
+ * balance or validate sustainability. For a complete analysis, use
+ * WITHDRAWAL_SCHEDULE instead.
  *
  * @param {number} portfolioValue   Current portfolio value
  * @param {number} withdrawalRate   Annual withdrawal rate (e.g., 0.04 for 4%)
  * @param {number} inflationRate    Expected inflation rate
  * @param {number} years            Number of years to project
- * @return {Array[]} Year-by-year withdrawal schedule maintaining purchasing power
+ * @return {Array[]} Year-by-year withdrawal schedule
  *
  * Example:
  * =SAFE_WITHDRAWAL_RATE(1000000, 0.04, 0.02, 30)
