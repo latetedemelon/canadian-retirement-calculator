@@ -12,7 +12,7 @@ This project provides a Google Apps Script file (`code.gs`) that plugs into a Go
 - **Optimal withdrawal strategy** recommendations
 - A **constant real spending** engine and much more
 
-📖 **[View Full Function Documentation](DOCS/INDEX.md)**
+📖 **[Complete Function Reference](DOCS/INDEX.md)**
 
 ---
 
@@ -69,7 +69,7 @@ The wizard creates an **INPUTS** sheet with these fields:
 |-----|-------|---------------|-------------|
 | 2 | Current age | 40 | Your current age in years |
 | 3 | Retirement age | 65 | When you plan to retire |
-| 4 | Planning age | 90 | Age to plan income until |
+| 4 | Planning age | 90 | Age to plan income until (see LIFE_EXPECTANCY_AGE in docs) |
 | 5 | RRSP balance now | 200,000 | Current RRSP/RRIF balance |
 | 6 | TFSA balance now | 50,000 | Current TFSA balance |
 | 7 | Annual RRSP contrib | 18,000 | Your annual RRSP contribution |
