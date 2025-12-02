@@ -3527,7 +3527,9 @@ function readCppContribs_() {
   try {
     var range = ss.getRangeByName('cpp_contribs_range');
     if (!range) {
-      throw new Error('Named range "cpp_contribs_range" not found. Please create CPP_Contribs sheet with this range.');
+      // CPP contribution data is optional - return empty array if not found
+      Logger.log('Warning: cpp_contribs_range not found. CPP estimation will use zero contributions.');
+      return [];
     }
     
     var values = range.getValues();
@@ -3553,7 +3555,7 @@ function readCppContribs_() {
     
     return result;
   } catch (e) {
-    // If CPP_Contribs doesn't exist, return empty array
+    // CPP contribution data is optional - return empty array if there's an error
     Logger.log('Warning: Could not read CPP contributions: ' + e.message);
     return [];
   }
