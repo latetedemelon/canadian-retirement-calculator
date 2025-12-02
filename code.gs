@@ -738,6 +738,8 @@ function onOpen() {
     .addItem('Setup sheets (INPUTS & OTHER_INCOME)', 'setupRetirementSheets')
     .addItem('Show CPP Comparison', 'insertCPPComparison_')
     .addItem('Show OAS Comparison', 'insertOASComparison_')
+    .addSeparator()
+    .addItem('Run Projection', 'runProjection')
     .addToUi();
 }
 
@@ -3347,4 +3349,616 @@ function CPP_START_AGE_COMPARISON(averageEarnings, contributionYears) {
   results.push(["• Break-even:", "Compare cumulative columns to find optimal start age", "", "", "", "", ""]);
 
   return results;
+}
+
+/**
+ * ----------------------------------------------------------------------
+ * SECTION 29 – Single-Scenario Retirement Workbook Flow
+ * ----------------------------------------------------------------------
+ *
+ * This section implements a full year-by-year retirement projection
+ * flow for a single scenario. Most calculations are done in Apps Script,
+ * with results written to the Calcs sheet for use in Summary.
+ *
+ * Sheet Structure:
+ * - Inputs: Contains all input parameters via named ranges
+ * - CPP_Contribs: Contains historical CPP contribution data
+ * - Calcs: Receives projection parameters and year-by-year projection table
+ * - Summary: Uses data from Calcs for summary displays
+ *
+ * Key Constants (configurable):
+ * - MAX_CPP_65_TODAY: Maximum CPP benefit at age 65 in today's dollars
+ * - FULL_OAS_ANNUAL_TODAY: Full OAS annual benefit in today's dollars
+ */
+
+/**
+ * Configuration constants for CPP/OAS estimation (in today's dollars).
+ * These can be adjusted to reflect current program parameters.
+ */
+var PROJECTION_CONSTANTS = {
+  MAX_CPP_65_TODAY: 16375,        // Annual CPP at 65 (approx $1364.60/month * 12)
+  FULL_OAS_ANNUAL_TODAY: 8560,    // Annual OAS at 65 (approx $713.34/month * 12)
+  CPP_EARLY_ADJUSTMENT: 0.072,    // 7.2% reduction per year before 65 (0.6% per month)
+  CPP_LATE_ADJUSTMENT: 0.084,     // 8.4% increase per year after 65 (0.7% per month)
+  OAS_DEFERRAL_BONUS: 0.072       // 7.2% increase per year deferred (0.6% per month)
+};
+
+/**
+ * Simple progressive tax brackets for estimation (in today's dollars).
+ * This is a placeholder using approximate combined federal+provincial rates.
+ * TODO: Replace with province-specific calculations for better accuracy.
+ */
+var SIMPLE_TAX_BRACKETS_TODAY = [
+  { min: 0,      max: 15000,  rate: 0.00 },   // Effectively no tax due to basic personal amount
+  { min: 15000,  max: 50000,  rate: 0.20 },   // ~20% combined
+  { min: 50000,  max: 100000, rate: 0.30 },   // ~30% combined
+  { min: 100000, max: 155000, rate: 0.40 },   // ~40% combined
+  { min: 155000, max: 220000, rate: 0.45 },   // ~45% combined
+  { min: 220000, max: Infinity, rate: 0.50 }  // ~50% combined
+];
+
+/**
+ * runProjection
+ *
+ * Main orchestration function that:
+ * 1. Reads inputs from the Inputs sheet
+ * 2. Reads CPP contribution history from CPP_Contribs sheet
+ * 3. Computes CPP and OAS benefit estimates
+ * 4. Writes global parameters to Calcs sheet
+ * 5. Builds and writes year-by-year projection table to Calcs sheet
+ *
+ * This function is called from the "Retirement Calculator" menu.
+ */
+function runProjection() {
+  try {
+    SpreadsheetApp.getActive().toast('Starting projection...', 'Retirement Calculator', 3);
+    
+    // Step 1: Read inputs
+    var inputs = readInputs_();
+    
+    // Step 2: Read CPP contribution history
+    var cppRows = readCppContribs_();
+    
+    // Step 3: Compute CPP benefit estimate
+    var cppResult = computeCppBenefit_(inputs, cppRows);
+    
+    // Step 4: Compute OAS benefit estimate
+    var oasResult = computeOasBenefit_(inputs);
+    
+    // Step 5: Write global parameters to Calcs
+    writeGlobals_(inputs, cppResult, oasResult);
+    
+    // Step 6: Build and write projection table
+    runProjectionTable_(inputs, cppResult, oasResult);
+    
+    SpreadsheetApp.getActive().toast('Projection complete! Check the Calcs sheet.', 'Retirement Calculator', 5);
+  } catch (e) {
+    SpreadsheetApp.getUi().alert('Error running projection: ' + e.message);
+    throw e;
+  }
+}
+
+/**
+ * readInputs_
+ *
+ * Reads all required named ranges from the Inputs sheet and returns
+ * a structured object with input parameters.
+ *
+ * Required named ranges on Inputs sheet:
+ * - retirement_age, current_age, current_year
+ * - cpp_start_age, oas_start_age
+ * - province, marital_status
+ * - current_income, annual_contrib
+ * - rrsp_balance_now, tfsa_balance_now, taxable_balance_now
+ * - real_return, inflation_rate
+ * - target_net_income_today
+ * - life_expectancy_age
+ *
+ * @return {Object} Input parameters
+ * @private
+ */
+function readInputs_() {
+  var ss = SpreadsheetApp.getActive();
+  
+  // Helper to read a named range
+  function getNamedValue(name) {
+    try {
+      var range = ss.getRangeByName(name);
+      if (!range) {
+        throw new Error('Named range "' + name + '" not found. Please ensure it exists on the Inputs sheet.');
+      }
+      return range.getValue();
+    } catch (e) {
+      throw new Error('Error reading named range "' + name + '": ' + e.message);
+    }
+  }
+  
+  var inputs = {
+    retirementAge: Number(getNamedValue('retirement_age')),
+    currentAge: Number(getNamedValue('current_age')),
+    currentYear: Number(getNamedValue('current_year')),
+    cppStartAge: Number(getNamedValue('cpp_start_age')),
+    oasStartAge: Number(getNamedValue('oas_start_age')),
+    province: String(getNamedValue('province')),
+    maritalStatus: String(getNamedValue('marital_status')),
+    currentIncome: Number(getNamedValue('current_income')),
+    annualContrib: Number(getNamedValue('annual_contrib')),
+    rrspBalanceNow: Number(getNamedValue('rrsp_balance_now')),
+    tfsaBalanceNow: Number(getNamedValue('tfsa_balance_now')),
+    taxableBalanceNow: Number(getNamedValue('taxable_balance_now')),
+    realReturnPct: Number(getNamedValue('real_return')),
+    inflationRatePct: Number(getNamedValue('inflation_rate')),
+    targetNetIncomeToday: Number(getNamedValue('target_net_income_today')),
+    lifeExpectancyAge: Number(getNamedValue('life_expectancy_age'))
+  };
+  
+  // Convert percentages to decimals
+  inputs.realReturn = inputs.realReturnPct / 100;
+  inputs.inflation = inputs.inflationRatePct / 100;
+  
+  // Compute derived values
+  inputs.totalBalanceNow = inputs.rrspBalanceNow + inputs.tfsaBalanceNow + inputs.taxableBalanceNow;
+  
+  // Validation
+  if (inputs.currentAge >= inputs.retirementAge) {
+    throw new Error('current_age must be less than retirement_age');
+  }
+  if (inputs.retirementAge >= inputs.lifeExpectancyAge) {
+    throw new Error('retirement_age must be less than life_expectancy_age');
+  }
+  
+  return inputs;
+}
+
+/**
+ * readCppContribs_
+ *
+ * Reads CPP contribution history from the cpp_contribs_range named range
+ * on the CPP_Contribs sheet.
+ *
+ * Expected columns: Year, Age, Pensionable Earnings, YMPE, Earnings/YMPE, Notes
+ *
+ * @return {Array} Array of contribution objects with {year, age, earnings, ympe, ratio}
+ * @private
+ */
+function readCppContribs_() {
+  var ss = SpreadsheetApp.getActive();
+  
+  try {
+    var range = ss.getRangeByName('cpp_contribs_range');
+    if (!range) {
+      throw new Error('Named range "cpp_contribs_range" not found. Please create CPP_Contribs sheet with this range.');
+    }
+    
+    var values = range.getValues();
+    var result = [];
+    
+    for (var i = 0; i < values.length; i++) {
+      var row = values[i];
+      var year = row[0];
+      
+      // Skip blank rows (no year)
+      if (!year || year === '' || year === 0) {
+        continue;
+      }
+      
+      result.push({
+        year: Number(year),
+        age: Number(row[1]),
+        earnings: Number(row[2]),
+        ympe: Number(row[3]),
+        ratio: Number(row[4])
+      });
+    }
+    
+    return result;
+  } catch (e) {
+    // If CPP_Contribs doesn't exist, return empty array
+    Logger.log('Warning: Could not read CPP contributions: ' + e.message);
+    return [];
+  }
+}
+
+/**
+ * computeCppBenefit_
+ *
+ * Computes a simplified CPP benefit estimate based on contribution history.
+ *
+ * Logic:
+ * - Computes average Earnings/YMPE ratio across all non-zero contribution years
+ * - Scales MAX_CPP_65_TODAY by this average ratio
+ * - Applies early/late adjustment based on cpp_start_age vs 65
+ *
+ * @param {Object} inputs Input parameters
+ * @param {Array} cppRows CPP contribution history
+ * @return {Object} {avgEarningsRatio, annualAt65Today, annualAtStartToday, startAge}
+ * @private
+ */
+function computeCppBenefit_(inputs, cppRows) {
+  var startAge = inputs.cppStartAge;
+  
+  // Calculate average earnings ratio
+  var sumRatio = 0;
+  var countYears = 0;
+  
+  for (var i = 0; i < cppRows.length; i++) {
+    if (cppRows[i].ratio > 0) {
+      sumRatio += cppRows[i].ratio;
+      countYears++;
+    }
+  }
+  
+  var avgEarningsRatio = countYears > 0 ? sumRatio / countYears : 0;
+  
+  // Base benefit at age 65 in today's dollars
+  var annualAt65Today = PROJECTION_CONSTANTS.MAX_CPP_65_TODAY * avgEarningsRatio;
+  
+  // Apply early/late adjustment
+  var yearsFromNormal = startAge - 65;
+  var adjustment = 1.0;
+  
+  if (yearsFromNormal < 0) {
+    // Early: reduce by 7.2% per year before 65
+    adjustment = 1 + (yearsFromNormal * PROJECTION_CONSTANTS.CPP_EARLY_ADJUSTMENT);
+  } else if (yearsFromNormal > 0) {
+    // Late: increase by 8.4% per year after 65
+    adjustment = 1 + (yearsFromNormal * PROJECTION_CONSTANTS.CPP_LATE_ADJUSTMENT);
+  }
+  
+  var annualAtStartToday = annualAt65Today * adjustment;
+  
+  return {
+    avgEarningsRatio: avgEarningsRatio,
+    annualAt65Today: annualAt65Today,
+    annualAtStartToday: annualAtStartToday,
+    startAge: startAge
+  };
+}
+
+/**
+ * computeOasBenefit_
+ *
+ * Computes a simplified OAS benefit estimate.
+ *
+ * For now, assumes full OAS eligibility (fractionFull = 1.0).
+ * Applies deferral bonus if oas_start_age > 65.
+ *
+ * @param {Object} inputs Input parameters
+ * @return {Object} {annualAtStartToday, startAge}
+ * @private
+ */
+function computeOasBenefit_(inputs) {
+  var startAge = inputs.oasStartAge;
+  
+  // Assume full OAS for simplicity
+  var fractionFull = 1.0;
+  var annualAt65Today = PROJECTION_CONSTANTS.FULL_OAS_ANNUAL_TODAY * fractionFull;
+  
+  // Apply deferral bonus if starting after 65
+  var yearsDeferred = Math.max(0, startAge - 65);
+  var adjustment = 1 + (yearsDeferred * PROJECTION_CONSTANTS.OAS_DEFERRAL_BONUS);
+  
+  var annualAtStartToday = annualAt65Today * adjustment;
+  
+  return {
+    annualAtStartToday: annualAtStartToday,
+    startAge: startAge
+  };
+}
+
+/**
+ * writeGlobals_
+ *
+ * Writes projection parameters and CPP/OAS summary values to the Calcs sheet
+ * using named ranges.
+ *
+ * Named ranges on Calcs:
+ * - projection_start_year
+ * - projection_end_year
+ * - real_return_decimal
+ * - inflation_decimal
+ * - cpp_annual_today
+ * - cpp_annual_nominal
+ * - oas_annual_today
+ * - oas_annual_nominal
+ *
+ * @param {Object} inputs Input parameters
+ * @param {Object} cppResult CPP benefit calculation result
+ * @param {Object} oasResult OAS benefit calculation result
+ * @private
+ */
+function writeGlobals_(inputs, cppResult, oasResult) {
+  var ss = SpreadsheetApp.getActive();
+  
+  // Helper to write to a named range
+  function setNamedValue(name, value) {
+    var range = ss.getRangeByName(name);
+    if (!range) {
+      throw new Error('Named range "' + name + '" not found on Calcs sheet.');
+    }
+    range.setValue(value);
+  }
+  
+  // Projection period
+  var projectionStartYear = inputs.currentYear;
+  var projectionEndYear = inputs.currentYear + (inputs.lifeExpectancyAge - inputs.currentAge);
+  
+  setNamedValue('projection_start_year', projectionStartYear);
+  setNamedValue('projection_end_year', projectionEndYear);
+  setNamedValue('real_return_decimal', inputs.realReturn);
+  setNamedValue('inflation_decimal', inputs.inflation);
+  
+  // CPP values
+  setNamedValue('cpp_annual_today', cppResult.annualAtStartToday);
+  
+  // CPP nominal value in the year it starts
+  var cppStartYear = inputs.currentYear + (cppResult.startAge - inputs.currentAge);
+  var cppAnnualNominal = inflateToYear_(cppResult.annualAtStartToday, inputs.currentYear, cppStartYear, inputs.inflation);
+  setNamedValue('cpp_annual_nominal', cppAnnualNominal);
+  
+  // OAS values
+  setNamedValue('oas_annual_today', oasResult.annualAtStartToday);
+  
+  // OAS nominal value in the year it starts
+  var oasStartYear = inputs.currentYear + (oasResult.startAge - inputs.currentAge);
+  var oasAnnualNominal = inflateToYear_(oasResult.annualAtStartToday, inputs.currentYear, oasStartYear, inputs.inflation);
+  setNamedValue('oas_annual_nominal', oasAnnualNominal);
+}
+
+/**
+ * runProjectionTable_
+ *
+ * Builds and writes a year-by-year projection table to the Calcs sheet.
+ * The table starts at row 51 (with headers at row 50).
+ *
+ * Columns:
+ * - Year, Age, Employment Income, CPP Income, OAS Income, DB Pension, Other Income,
+ *   Gross Income, Taxes, Net Income, Start Balance, Contributions, Withdrawals,
+ *   Investment Return, End Balance, Net Income (today's $)
+ *
+ * @param {Object} inputs Input parameters
+ * @param {Object} cppResult CPP benefit calculation result
+ * @param {Object} oasResult OAS benefit calculation result
+ * @private
+ */
+function runProjectionTable_(inputs, cppResult, oasResult) {
+  var ss = SpreadsheetApp.getActive();
+  var calcsSheet = ss.getSheetByName('Calcs');
+  
+  if (!calcsSheet) {
+    throw new Error('Calcs sheet not found. Please create it first.');
+  }
+  
+  // Define column headers
+  var headers = [
+    'Year', 'Age', 'Employment Income', 'CPP Income', 'OAS Income', 'DB Pension', 'Other Income',
+    'Gross Income', 'Taxes', 'Net Income', 'Start Balance', 'Contributions', 'Withdrawals',
+    'Investment Return', 'End Balance', 'Net Income (today\'s $)'
+  ];
+  
+  // Clear existing projection table (from row 50 onwards)
+  var lastRow = calcsSheet.getLastRow();
+  if (lastRow >= 50) {
+    calcsSheet.getRange(50, 1, lastRow - 49, headers.length).clearContent();
+  }
+  
+  // Write headers at row 50
+  calcsSheet.getRange(50, 1, 1, headers.length).setValues([headers]);
+  calcsSheet.getRange(50, 1, 1, headers.length).setFontWeight('bold');
+  
+  // Build projection rows
+  var projectionData = [];
+  var portfolioBalance = inputs.totalBalanceNow;
+  
+  var numYears = inputs.lifeExpectancyAge - inputs.currentAge + 1;
+  
+  for (var i = 0; i < numYears; i++) {
+    var year = inputs.currentYear + i;
+    var age = inputs.currentAge + i;
+    
+    // Employment income (only before retirement)
+    var employmentIncome = 0;
+    if (age < inputs.retirementAge) {
+      // Inflate current income to this year
+      employmentIncome = inflateToYear_(inputs.currentIncome, inputs.currentYear, year, inputs.inflation);
+    }
+    
+    // CPP income (starts at cpp_start_age)
+    var cppIncome = 0;
+    if (age >= cppResult.startAge) {
+      cppIncome = inflateToYear_(cppResult.annualAtStartToday, inputs.currentYear, year, inputs.inflation);
+    }
+    
+    // OAS income (starts at oas_start_age)
+    var oasIncome = 0;
+    if (age >= oasResult.startAge) {
+      oasIncome = inflateToYear_(oasResult.annualAtStartToday, inputs.currentYear, year, inputs.inflation);
+    }
+    
+    // DB Pension and Other Income (placeholder for future expansion)
+    var dbPension = 0;
+    var otherIncome = 0;
+    
+    // Gross income before withdrawals
+    var grossIncomeBeforeWithdrawal = employmentIncome + cppIncome + oasIncome + dbPension + otherIncome;
+    
+    // Contributions (only pre-retirement)
+    var contributions = 0;
+    if (age < inputs.retirementAge) {
+      contributions = inflateToYear_(inputs.annualContrib, inputs.currentYear, year, inputs.inflation);
+    }
+    
+    // Withdrawals (only post-retirement)
+    var withdrawals = 0;
+    var taxes = 0;
+    var netIncome = 0;
+    var grossIncome = grossIncomeBeforeWithdrawal;
+    
+    if (age >= inputs.retirementAge) {
+      // Target net income for this year
+      var targetNetThisYear = inflateToYear_(inputs.targetNetIncomeToday, inputs.currentYear, year, inputs.inflation);
+      
+      // Compute tax on income before withdrawal
+      var taxBeforeWithdrawal = computeTax_(grossIncomeBeforeWithdrawal, inputs, year);
+      var netBeforeWithdrawal = grossIncomeBeforeWithdrawal - taxBeforeWithdrawal;
+      
+      // Determine withdrawal needed to reach target net income
+      var netGap = targetNetThisYear - netBeforeWithdrawal;
+      
+      if (netGap > 0 && portfolioBalance > 0) {
+        // Approximate marginal tax rate for withdrawal
+        var marginalRate = computeMarginalRate_(grossIncomeBeforeWithdrawal, inputs, year);
+        
+        // Withdrawal needed: netGap / (1 - marginalRate)
+        var withdrawalNeeded = netGap / (1 - marginalRate);
+        withdrawalNeeded = Math.max(0, Math.min(withdrawalNeeded, portfolioBalance));
+        
+        withdrawals = withdrawalNeeded;
+        grossIncome = grossIncomeBeforeWithdrawal + withdrawals;
+        
+        // Recompute taxes with withdrawal included
+        taxes = computeTax_(grossIncome, inputs, year);
+        netIncome = grossIncome - taxes;
+      } else {
+        grossIncome = grossIncomeBeforeWithdrawal;
+        taxes = taxBeforeWithdrawal;
+        netIncome = netBeforeWithdrawal;
+      }
+    } else {
+      // Pre-retirement: simple tax calculation
+      taxes = computeTax_(grossIncome, inputs, year);
+      netIncome = grossIncome - taxes;
+    }
+    
+    // Portfolio evolution
+    var startBalance = portfolioBalance;
+    var investmentReturn = portfolioBalance * inputs.realReturn;
+    var endBalance = portfolioBalance + contributions - withdrawals + investmentReturn;
+    endBalance = Math.max(0, endBalance);  // Can't go negative
+    
+    portfolioBalance = endBalance;
+    
+    // Net income in today's dollars
+    var netIncomeToday = discountToYearZero_(netIncome, inputs.currentYear, year, inputs.inflation);
+    
+    // Build row
+    projectionData.push([
+      year,
+      age,
+      Math.round(employmentIncome),
+      Math.round(cppIncome),
+      Math.round(oasIncome),
+      Math.round(dbPension),
+      Math.round(otherIncome),
+      Math.round(grossIncome),
+      Math.round(taxes),
+      Math.round(netIncome),
+      Math.round(startBalance),
+      Math.round(contributions),
+      Math.round(withdrawals),
+      Math.round(investmentReturn),
+      Math.round(endBalance),
+      Math.round(netIncomeToday)
+    ]);
+  }
+  
+  // Write projection data starting at row 51
+  if (projectionData.length > 0) {
+    calcsSheet.getRange(51, 1, projectionData.length, headers.length).setValues(projectionData);
+  }
+}
+
+/**
+ * computeTax_
+ *
+ * Simplified progressive tax calculation using inflation-adjusted brackets.
+ * This is a placeholder - for better accuracy, use ESTIMATE_TAX with province.
+ *
+ * @param {number} grossIncome Gross income for the year (nominal)
+ * @param {Object} inputs Input parameters
+ * @param {number} year The year for which to compute tax
+ * @return {number} Estimated tax
+ * @private
+ */
+function computeTax_(grossIncome, inputs, year) {
+  if (grossIncome <= 0) return 0;
+  
+  var tax = 0;
+  
+  // Inflate brackets to the target year
+  for (var i = 0; i < SIMPLE_TAX_BRACKETS_TODAY.length; i++) {
+    var bracket = SIMPLE_TAX_BRACKETS_TODAY[i];
+    var minInflated = inflateToYear_(bracket.min, inputs.currentYear, year, inputs.inflation);
+    var maxInflated = inflateToYear_(bracket.max, inputs.currentYear, year, inputs.inflation);
+    
+    if (grossIncome > minInflated) {
+      var taxableInBracket = Math.min(grossIncome - minInflated, maxInflated - minInflated);
+      if (taxableInBracket > 0) {
+        tax += taxableInBracket * bracket.rate;
+      }
+    }
+  }
+  
+  return tax;
+}
+
+/**
+ * computeMarginalRate_
+ *
+ * Computes the marginal tax rate at a given income level.
+ *
+ * @param {number} grossIncome Gross income (nominal)
+ * @param {Object} inputs Input parameters
+ * @param {number} year The year
+ * @return {number} Marginal rate (0 to 1)
+ * @private
+ */
+function computeMarginalRate_(grossIncome, inputs, year) {
+  // Find which bracket the income falls into
+  for (var i = 0; i < SIMPLE_TAX_BRACKETS_TODAY.length; i++) {
+    var bracket = SIMPLE_TAX_BRACKETS_TODAY[i];
+    var minInflated = inflateToYear_(bracket.min, inputs.currentYear, year, inputs.inflation);
+    var maxInflated = inflateToYear_(bracket.max, inputs.currentYear, year, inputs.inflation);
+    
+    if (grossIncome >= minInflated && grossIncome < maxInflated) {
+      return bracket.rate;
+    }
+  }
+  
+  // If we're above all brackets, return the highest rate
+  return SIMPLE_TAX_BRACKETS_TODAY[SIMPLE_TAX_BRACKETS_TODAY.length - 1].rate;
+}
+
+/**
+ * inflateToYear_
+ *
+ * Inflates a value from baseYear to targetYear using an inflation rate.
+ *
+ * @param {number} value Value in baseYear dollars
+ * @param {number} baseYear Starting year
+ * @param {number} targetYear Ending year
+ * @param {number} inflationRate Annual inflation rate (decimal)
+ * @return {number} Value in targetYear dollars
+ * @private
+ */
+function inflateToYear_(value, baseYear, targetYear, inflationRate) {
+  var years = targetYear - baseYear;
+  return value * Math.pow(1 + inflationRate, years);
+}
+
+/**
+ * discountToYearZero_
+ *
+ * Discounts a nominal value in a given year back to baseYear using inflation.
+ *
+ * @param {number} value Nominal value in the given year
+ * @param {number} baseYear The reference year (year zero)
+ * @param {number} year The year of the value
+ * @param {number} inflationRate Annual inflation rate (decimal)
+ * @return {number} Value in baseYear dollars
+ * @private
+ */
+function discountToYearZero_(value, baseYear, year, inflationRate) {
+  var years = year - baseYear;
+  return value / Math.pow(1 + inflationRate, years);
 }
