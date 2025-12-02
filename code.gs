@@ -3036,7 +3036,7 @@ function OAS_BREAKEVEN_AGE(yearsInCanada) {
     // At break-even: benefit65 * (breakeven - 65) * 12 = benefit * (breakeven - age) * 12
     var breakeven;
     if (benefit > benefit65) {
-      breakeven = (age * benefit - 65 * benefit65) / (benefit - benefit65);
+      breakeven = (benefit65 * 65 - benefit * age) / (benefit - benefit65);
       if (breakeven < age || breakeven > 100) {
         breakeven = "N/A";
       } else {
