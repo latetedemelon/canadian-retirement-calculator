@@ -2741,7 +2741,6 @@ function WITHDRAWAL_SCHEDULE(portfolioValue, withdrawalRate, inflationRate, nomi
     return [["ERROR: years must be > 0"]];
   }
 
-  var realReturn = realReturn_(nominalReturn, inflationRate);
   var results = [["Year", "Withdrawal", "Portfolio Start", "Portfolio End", "Sustainable?"]];
 
   var initialWithdrawal = portfolioValue * withdrawalRate;
@@ -2752,7 +2751,7 @@ function WITHDRAWAL_SCHEDULE(portfolioValue, withdrawalRate, inflationRate, nomi
   for (var year = 1; year <= years; year++) {
     var portfolioStart = balance;
     
-    // Withdrawal increases with inflation to maintain purchasing power
+    // Withdrawal increases with inflation to maintain purchasing power (nominal dollars)
     var withdrawal = initialWithdrawal * Math.pow(1 + inflationRate, year - 1);
     
     // Check if portfolio is depleted
@@ -2775,7 +2774,7 @@ function WITHDRAWAL_SCHEDULE(portfolioValue, withdrawalRate, inflationRate, nomi
     var actualWithdrawal = Math.min(withdrawal, balance);
     balance -= actualWithdrawal;
 
-    // Apply investment return on remaining balance
+    // Apply investment return on remaining balance (nominal return)
     balance = balance * (1 + nominalReturn);
 
     var sustainable = balance > 0 ? "Yes" : "No - depleted";
