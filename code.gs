@@ -957,6 +957,18 @@ var OAS_2024 = {
 };
 
 /**
+ * Tax credit constants for 2024
+ * Used by ESTIMATE_TAX_WITH_CREDITS for senior tax credits
+ */
+var TAX_CREDITS_2024 = {
+  FEDERAL_AGE_AMOUNT: 8396,                // Federal age amount for 65+
+  FEDERAL_AGE_INCOME_THRESHOLD: 42335,     // Income threshold for age amount reduction
+  FEDERAL_AGE_CLAWBACK_RATE: 0.15,         // 15% reduction above threshold
+  FEDERAL_PENSION_CREDIT_MAX: 2000,        // Maximum pension income credit
+  FEDERAL_LOWEST_RATE: 0.15                // Federal lowest tax bracket rate
+};
+
+/**
  * OAS_BENEFIT
  *
  * Calculates the estimated monthly OAS benefit.
@@ -3075,17 +3087,6 @@ function OAS_BREAKEVEN_AGE(yearsInCanada) {
  *
  * Enhanced tax estimation including age credit and pension income credit.
  */
-
-/**
- * Tax credit constants for 2024
- */
-var TAX_CREDITS_2024 = {
-  FEDERAL_AGE_AMOUNT: 8396,                // Federal age amount for 65+
-  FEDERAL_AGE_INCOME_THRESHOLD: 42335,     // Income threshold for age amount reduction
-  FEDERAL_AGE_CLAWBACK_RATE: 0.15,         // 15% reduction above threshold
-  FEDERAL_PENSION_CREDIT_MAX: 2000,        // Maximum pension income credit
-  FEDERAL_LOWEST_RATE: 0.15                // Federal lowest tax bracket rate
-};
 
 /**
  * ESTIMATE_TAX_WITH_CREDITS
