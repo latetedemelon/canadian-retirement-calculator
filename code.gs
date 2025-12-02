@@ -712,8 +712,20 @@ function setupRetirementSheets() {
  * =SETUP_RETIREMENT_CALCULATOR()
  */
 function SETUP_RETIREMENT_CALCULATOR() {
-  ensureRequiredSheets_();
-  return "Setup complete! INPUTS and OTHER_INCOME sheets are ready.";
+  try {
+    ensureRequiredSheets_();
+    // Verify sheets were created successfully
+    var ss = SpreadsheetApp.getActive();
+    var inputsSheet = ss.getSheetByName('INPUTS');
+    var otherIncomeSheet = ss.getSheetByName('OTHER_INCOME');
+    if (inputsSheet && otherIncomeSheet) {
+      return "Setup complete! INPUTS and OTHER_INCOME sheets are ready.";
+    } else {
+      return "Setup incomplete. Please try running Retirement > Setup sheets from the menu.";
+    }
+  } catch (e) {
+    return "Setup failed: " + e.message;
+  }
 }
 
 /**
@@ -2857,6 +2869,9 @@ function OAS_BREAKEVEN_AGE(yearsInCanada) {
   if (yearsInCanada < OAS_2024.MIN_RESIDENCE_YEARS) {
     return [["ERROR: Minimum 10 years residence required for OAS"]];
   }
+
+  // Cap years at maximum (40 years for full OAS)
+  yearsInCanada = Math.min(yearsInCanada, OAS_2024.FULL_RESIDENCE_YEARS);
 
   // Calculate OAS at different start ages
   var benefit65 = OAS_BENEFIT(yearsInCanada, 65, 65);
