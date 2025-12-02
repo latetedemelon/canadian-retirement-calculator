@@ -726,7 +726,13 @@ var CPP_2024 = {
   MIN_START_AGE: 60,
   NORMAL_AGE: 65,
   MAX_START_AGE: 70,
-  CONTRIBUTION_YEARS_FOR_MAX: 39        // Years of max contributions needed for full benefit
+  CONTRIBUTION_YEARS_FOR_MAX: 39,       // Years of max contributions needed for full benefit
+  // Survivor benefit constants
+  MAX_SURVIVOR_UNDER_65: 707.95,        // Maximum monthly survivor benefit under 65
+  MAX_SURVIVOR_65_PLUS: 818.76,         // Maximum monthly survivor benefit 65+
+  FLAT_RATE_UNDER_65: 217.99,           // Flat-rate portion for survivors under 65
+  CHILD_BENEFIT: 281.72,                // Monthly benefit per eligible child
+  DEATH_BENEFIT: 2500                   // Lump-sum death benefit
 };
 
 /**
@@ -1964,4 +1970,561 @@ function VALIDATE_RETIREMENT_INPUTS(currentAge, retirementAge, lifeExpectancy, r
   }
 
   return "ERRORS: " + errors.join("; ");
+}
+
+
+/**
+ * ----------------------------------------------------------------------
+ * SECTION 17 – Retirement Readiness & Savings Target Calculator
+ * ----------------------------------------------------------------------
+ *
+ * Calculates how much you need to save for retirement and whether
+ * you're on track.
+ */
+
+/**
+ * RETIREMENT_SAVINGS_TARGET
+ *
+ * Calculates the total savings needed at retirement to fund your
+ * desired lifestyle, accounting for CPP, OAS, and other income.
+ *
+ * @param {number} desiredAnnualSpending   Annual spending in retirement (real dollars)
+ * @param {number} retirementAge           Age at retirement
+ * @param {number} lifeExpectancy          Planning age
+ * @param {number} otherAnnualIncome       Annual income from CPP, OAS, pensions, etc.
+ * @param {number} postRetRealReturn       Real return after retirement (e.g., 0.02)
+ *
+ * @return {number} Total savings needed at retirement
+ *
+ * Example:
+ * =RETIREMENT_SAVINGS_TARGET(60000, 65, 90, 25000, 0.02)
+ */
+function RETIREMENT_SAVINGS_TARGET(desiredAnnualSpending, retirementAge, lifeExpectancy, otherAnnualIncome, postRetRealReturn) {
+  desiredAnnualSpending = Number(desiredAnnualSpending);
+  retirementAge         = Number(retirementAge);
+  lifeExpectancy        = Number(lifeExpectancy);
+  otherAnnualIncome     = Number(otherAnnualIncome) || 0;
+  postRetRealReturn     = Number(postRetRealReturn) || 0.02;
+
+  if (desiredAnnualSpending <= 0) {
+    return "ERROR: desiredAnnualSpending must be > 0";
+  }
+  if (lifeExpectancy <= retirementAge) {
+    return "ERROR: lifeExpectancy must be > retirementAge";
+  }
+
+  var yearsInRetirement = lifeExpectancy - retirementAge;
+  var annualNeedFromSavings = Math.max(0, desiredAnnualSpending - otherAnnualIncome);
+
+  // Calculate present value of annuity (savings needed)
+  if (Math.abs(postRetRealReturn) < 1e-8) {
+    return annualNeedFromSavings * yearsInRetirement;
+  }
+
+  var pvFactor = (1 - Math.pow(1 + postRetRealReturn, -yearsInRetirement)) / postRetRealReturn;
+  var savingsNeeded = annualNeedFromSavings * pvFactor;
+
+  return Math.round(savingsNeeded);
+}
+
+/**
+ * RETIREMENT_READINESS_SCORE
+ *
+ * Calculates a retirement readiness score (0-100%) based on
+ * current savings trajectory vs. target.
+ *
+ * @param {number} currentAge              Current age
+ * @param {number} retirementAge           Planned retirement age
+ * @param {number} lifeExpectancy          Planning age
+ * @param {number} currentSavings          Total current retirement savings
+ * @param {number} annualContribution      Annual contribution to retirement accounts
+ * @param {number} desiredAnnualSpending   Target spending in retirement
+ * @param {number} otherAnnualIncome       CPP, OAS, pension income expected
+ * @param {number} preRetRealReturn        Real return before retirement
+ * @param {number} postRetRealReturn       Real return after retirement
+ *
+ * @return {Array[]} Score and analysis
+ *
+ * Example:
+ * =RETIREMENT_READINESS_SCORE(40, 65, 90, 250000, 24000, 60000, 25000, 0.04, 0.02)
+ */
+function RETIREMENT_READINESS_SCORE(
+  currentAge, retirementAge, lifeExpectancy, currentSavings,
+  annualContribution, desiredAnnualSpending, otherAnnualIncome,
+  preRetRealReturn, postRetRealReturn
+) {
+  currentAge            = Number(currentAge);
+  retirementAge         = Number(retirementAge);
+  lifeExpectancy        = Number(lifeExpectancy);
+  currentSavings        = Number(currentSavings);
+  annualContribution    = Number(annualContribution);
+  desiredAnnualSpending = Number(desiredAnnualSpending);
+  otherAnnualIncome     = Number(otherAnnualIncome) || 0;
+  preRetRealReturn      = Number(preRetRealReturn) || 0.04;
+  postRetRealReturn     = Number(postRetRealReturn) || 0.02;
+
+  var yearsToRetirement = retirementAge - currentAge;
+
+  // Calculate projected savings at retirement
+  var projectedSavings = futureValueReal_(currentSavings, annualContribution, preRetRealReturn, yearsToRetirement);
+
+  // Calculate target savings needed
+  var targetSavings = RETIREMENT_SAVINGS_TARGET(
+    desiredAnnualSpending, retirementAge, lifeExpectancy,
+    otherAnnualIncome, postRetRealReturn
+  );
+
+  if (typeof targetSavings === 'string') {
+    return [[targetSavings]];
+  }
+
+  // Calculate score
+  var score = Math.min(100, Math.round((projectedSavings / targetSavings) * 100));
+  var surplus = projectedSavings - targetSavings;
+  var status;
+
+  if (score >= 100) {
+    status = "On Track ✓";
+  } else if (score >= 80) {
+    status = "Nearly There";
+  } else if (score >= 60) {
+    status = "Needs Attention";
+  } else {
+    status = "Significant Gap";
+  }
+
+  return [
+    ["Metric", "Value"],
+    ["Readiness Score", score + "%"],
+    ["Status", status],
+    ["Target Savings Needed", Math.round(targetSavings)],
+    ["Projected Savings", Math.round(projectedSavings)],
+    ["Surplus / (Shortfall)", Math.round(surplus)],
+    ["Years to Retirement", yearsToRetirement],
+    ["Annual Contribution", annualContribution]
+  ];
+}
+
+
+/**
+ * ----------------------------------------------------------------------
+ * SECTION 18 – CPP Survivor Benefits Calculator
+ * ----------------------------------------------------------------------
+ *
+ * Calculates CPP survivor pension for a surviving spouse.
+ * Uses constants from CPP_2024 object for consistency.
+ */
+
+/**
+ * CPP_SURVIVOR_BENEFIT
+ *
+ * Calculates the CPP survivor pension for a surviving spouse.
+ *
+ * @param {number} deceasedCPP         Deceased's CPP pension (or estimated if not receiving)
+ * @param {number} survivorAge         Survivor's age
+ * @param {boolean} survivorReceivesCPP  Is survivor already receiving their own CPP?
+ * @param {number} survivorCPP         Survivor's own CPP amount (if receiving)
+ *
+ * @return {number} Monthly survivor benefit
+ *
+ * Example:
+ * =CPP_SURVIVOR_BENEFIT(1000, 55, FALSE, 0)
+ */
+function CPP_SURVIVOR_BENEFIT(deceasedCPP, survivorAge, survivorReceivesCPP, survivorCPP) {
+  deceasedCPP          = Number(deceasedCPP);
+  survivorAge          = Number(survivorAge);
+  var isReceiving      = asBool_(survivorReceivesCPP);
+  survivorCPP          = Number(survivorCPP) || 0;
+
+  if (deceasedCPP < 0 || survivorAge < 0) {
+    return "ERROR: Values must be non-negative";
+  }
+
+  var survivorBenefit;
+
+  if (survivorAge < 65) {
+    // Under 65: Flat rate + 37.5% of deceased's pension
+    survivorBenefit = CPP_2024.FLAT_RATE_UNDER_65 + (deceasedCPP * 0.375);
+    survivorBenefit = Math.min(survivorBenefit, CPP_2024.MAX_SURVIVOR_UNDER_65);
+  } else {
+    // 65 and over: 60% of deceased's pension
+    survivorBenefit = deceasedCPP * 0.60;
+    survivorBenefit = Math.min(survivorBenefit, CPP_2024.MAX_SURVIVOR_65_PLUS);
+  }
+
+  // If survivor already receives CPP, combined benefit is capped
+  if (isReceiving && survivorCPP > 0) {
+    // Combined benefit cannot exceed maximum single retirement pension
+    var maxRetirement = CPP_2024.MAX_MONTHLY_BENEFIT_AT_65;
+    var combined = survivorCPP + survivorBenefit;
+    if (combined > maxRetirement) {
+      survivorBenefit = Math.max(0, maxRetirement - survivorCPP);
+    }
+  }
+
+  return Math.round(survivorBenefit * 100) / 100;
+}
+
+/**
+ * CPP_DEATH_BENEFIT
+ *
+ * Returns the CPP lump-sum death benefit.
+ *
+ * @return {number} Death benefit amount (fixed at $2,500)
+ */
+function CPP_DEATH_BENEFIT() {
+  return CPP_2024.DEATH_BENEFIT;
+}
+
+
+/**
+ * ----------------------------------------------------------------------
+ * SECTION 19 – Pension Income Splitting Calculator
+ * ----------------------------------------------------------------------
+ *
+ * Calculates tax savings from pension income splitting between spouses.
+ */
+
+/**
+ * PENSION_INCOME_SPLIT
+ *
+ * Calculates optimal pension income splitting between spouses
+ * and potential tax savings.
+ *
+ * Rules:
+ * - Up to 50% of eligible pension income can be split
+ * - Must be 65+ for RRIF/RRSP income (or any age for DB pension)
+ * - Both spouses must be Canadian residents
+ *
+ * @param {number} higherSpouseIncome    Higher-income spouse's total income
+ * @param {number} lowerSpouseIncome     Lower-income spouse's total income
+ * @param {number} eligiblePensionIncome Pension income eligible for splitting
+ * @param {string} province              Province code
+ *
+ * @return {Array[]} Analysis of income splitting benefits
+ *
+ * Example:
+ * =PENSION_INCOME_SPLIT(80000, 20000, 40000, "ON")
+ */
+function PENSION_INCOME_SPLIT(higherSpouseIncome, lowerSpouseIncome, eligiblePensionIncome, province) {
+  higherSpouseIncome    = Number(higherSpouseIncome);
+  lowerSpouseIncome     = Number(lowerSpouseIncome);
+  eligiblePensionIncome = Number(eligiblePensionIncome);
+  province              = (province || "ON").toString().trim().toUpperCase();
+
+  if (higherSpouseIncome < 0 || lowerSpouseIncome < 0 || eligiblePensionIncome < 0) {
+    return [["ERROR: Values must be non-negative"]];
+  }
+
+  // Maximum split is 50% of eligible pension income
+  var maxSplit = eligiblePensionIncome * 0.50;
+
+  // Calculate tax without splitting
+  var taxWithoutSplitHigher = ESTIMATE_TAX(higherSpouseIncome, province);
+  var taxWithoutSplitLower = ESTIMATE_TAX(lowerSpouseIncome, province);
+
+  if (typeof taxWithoutSplitHigher === 'string' || typeof taxWithoutSplitLower === 'string') {
+    return [["ERROR: Province not supported"]];
+  }
+
+  var totalTaxWithout = taxWithoutSplitHigher + taxWithoutSplitLower;
+
+  // Find optimal split amount using 1% increments for accuracy
+  var optimalSplit = 0;
+  var minTax = totalTaxWithout;
+
+  for (var splitPct = 0; splitPct <= 50; splitPct += 1) {
+    var splitAmount = eligiblePensionIncome * (splitPct / 100);
+    var newHigherIncome = higherSpouseIncome - splitAmount;
+    var newLowerIncome = lowerSpouseIncome + splitAmount;
+
+    var newTaxHigher = ESTIMATE_TAX(newHigherIncome, province);
+    var newTaxLower = ESTIMATE_TAX(newLowerIncome, province);
+
+    if (typeof newTaxHigher === 'number' && typeof newTaxLower === 'number') {
+      var newTotalTax = newTaxHigher + newTaxLower;
+      if (newTotalTax < minTax) {
+        minTax = newTotalTax;
+        optimalSplit = splitAmount;
+      }
+    }
+  }
+
+  var taxSavings = totalTaxWithout - minTax;
+
+  return [
+    ["Metric", "Value"],
+    ["Eligible Pension Income", eligiblePensionIncome],
+    ["Maximum Splittable (50%)", maxSplit],
+    ["Optimal Split Amount", Math.round(optimalSplit)],
+    ["Tax Without Splitting", Math.round(totalTaxWithout)],
+    ["Tax With Optimal Split", Math.round(minTax)],
+    ["Annual Tax Savings", Math.round(taxSavings)],
+    ["Higher Spouse New Income", Math.round(higherSpouseIncome - optimalSplit)],
+    ["Lower Spouse New Income", Math.round(lowerSpouseIncome + optimalSplit)]
+  ];
+}
+
+
+/**
+ * ----------------------------------------------------------------------
+ * SECTION 20 – Estate & Beneficiary Tax Calculator
+ * ----------------------------------------------------------------------
+ *
+ * Calculates taxes owing on death for RRSP/RRIF accounts.
+ */
+
+/**
+ * ESTATE_TAX_RRSP
+ *
+ * Calculates the tax owing when RRSP/RRIF is collapsed upon death.
+ *
+ * When the account holder dies:
+ * - If transferred to spouse: No immediate tax (rollover)
+ * - If transferred to financially dependent child/grandchild: Possible rollover
+ * - Otherwise: Full balance taxed as income in final return
+ *
+ * @param {number} rrspBalance           RRSP/RRIF balance at death
+ * @param {number} otherIncomeInYear     Other income in year of death
+ * @param {string} province              Province of residence
+ * @param {boolean} hasSpouse            Does deceased have a surviving spouse?
+ *
+ * @return {Array[]} Estate tax analysis
+ *
+ * Example:
+ * =ESTATE_TAX_RRSP(500000, 30000, "ON", FALSE)
+ */
+function ESTATE_TAX_RRSP(rrspBalance, otherIncomeInYear, province, hasSpouse) {
+  rrspBalance        = Number(rrspBalance);
+  otherIncomeInYear  = Number(otherIncomeInYear) || 0;
+  province           = (province || "ON").toString().trim().toUpperCase();
+  var hasSpouseBool  = asBool_(hasSpouse);
+
+  if (rrspBalance < 0) {
+    return [["ERROR: rrspBalance must be >= 0"]];
+  }
+
+  // If spouse exists, can roll over tax-free
+  if (hasSpouseBool) {
+    return [
+      ["Metric", "Value"],
+      ["RRSP/RRIF Balance", rrspBalance],
+      ["Spouse Rollover", "Available"],
+      ["Immediate Tax Owing", 0],
+      ["Note", "Tax-free rollover to spouse's RRSP/RRIF"]
+    ];
+  }
+
+  // No spouse - full balance is taxable income
+  var totalIncome = otherIncomeInYear + rrspBalance;
+  var taxOnTotal = ESTIMATE_TAX(totalIncome, province);
+  var taxOnOther = ESTIMATE_TAX(otherIncomeInYear, province);
+
+  if (typeof taxOnTotal !== 'number' || typeof taxOnOther !== 'number') {
+    return [["ERROR: Province not supported"]];
+  }
+
+  var taxOnRRSP = taxOnTotal - taxOnOther;
+  var effectiveRate = (taxOnRRSP / rrspBalance) * 100;
+  var netToEstate = rrspBalance - taxOnRRSP;
+
+  return [
+    ["Metric", "Value"],
+    ["RRSP/RRIF Balance", rrspBalance],
+    ["Other Income in Year", otherIncomeInYear],
+    ["Total Taxable Income", totalIncome],
+    ["Tax on RRSP/RRIF", Math.round(taxOnRRSP)],
+    ["Effective Tax Rate", Math.round(effectiveRate * 10) / 10 + "%"],
+    ["Net to Estate", Math.round(netToEstate)],
+    ["Province", province]
+  ];
+}
+
+
+/**
+ * ----------------------------------------------------------------------
+ * SECTION 21 – Inflation-Adjusted Future Value Calculator
+ * ----------------------------------------------------------------------
+ *
+ * Calculates what amounts will be worth in future or today's dollars.
+ */
+
+/**
+ * FUTURE_VALUE_INFLATION
+ *
+ * Calculates the future nominal value needed to have the same
+ * purchasing power as today's amount.
+ *
+ * @param {number} todayAmount     Amount in today's dollars
+ * @param {number} years           Years into the future
+ * @param {number} inflationRate   Expected annual inflation rate
+ *
+ * @return {number} Future nominal amount needed
+ *
+ * Example:
+ * =FUTURE_VALUE_INFLATION(50000, 25, 0.02)
+ * → $82,030 (what $50,000 today will need to be in 25 years)
+ */
+function FUTURE_VALUE_INFLATION(todayAmount, years, inflationRate) {
+  todayAmount   = Number(todayAmount);
+  years         = Number(years);
+  inflationRate = Number(inflationRate) || 0.02;
+
+  if (todayAmount < 0 || years < 0) {
+    return "ERROR: Values must be non-negative";
+  }
+
+  return Math.round(todayAmount * Math.pow(1 + inflationRate, years) * 100) / 100;
+}
+
+/**
+ * PRESENT_VALUE_INFLATION
+ *
+ * Calculates today's value of a future nominal amount.
+ *
+ * @param {number} futureAmount    Amount in future nominal dollars
+ * @param {number} years           Years from now
+ * @param {number} inflationRate   Expected annual inflation rate
+ *
+ * @return {number} Present value in today's dollars
+ *
+ * Example:
+ * =PRESENT_VALUE_INFLATION(100000, 25, 0.02)
+ * → $60,953 (what $100,000 in 25 years is worth today)
+ */
+function PRESENT_VALUE_INFLATION(futureAmount, years, inflationRate) {
+  futureAmount  = Number(futureAmount);
+  years         = Number(years);
+  inflationRate = Number(inflationRate) || 0.02;
+
+  if (futureAmount < 0 || years < 0) {
+    return "ERROR: Values must be non-negative";
+  }
+
+  return Math.round(futureAmount / Math.pow(1 + inflationRate, years) * 100) / 100;
+}
+
+
+/**
+ * ----------------------------------------------------------------------
+ * SECTION 22 – Net Worth Summary Calculator
+ * ----------------------------------------------------------------------
+ *
+ * Provides a comprehensive net worth snapshot.
+ */
+
+/**
+ * NET_WORTH_SUMMARY
+ *
+ * Calculates total net worth across all account types.
+ *
+ * @param {number} rrspBalance       RRSP/RRIF balance
+ * @param {number} tfsaBalance       TFSA balance
+ * @param {number} nonRegBalance     Non-registered investment balance
+ * @param {number} homeEquity        Home equity (value - mortgage)
+ * @param {number} otherAssets       Other assets (vehicles, etc.)
+ * @param {number} debts             Total debts (excluding mortgage)
+ * @param {number} marginalTaxRate   Marginal tax rate (for RRSP after-tax value)
+ *
+ * @return {Array[]} Net worth breakdown
+ *
+ * Example:
+ * =NET_WORTH_SUMMARY(400000, 100000, 50000, 300000, 30000, 10000, 0.35)
+ */
+function NET_WORTH_SUMMARY(rrspBalance, tfsaBalance, nonRegBalance, homeEquity, otherAssets, debts, marginalTaxRate) {
+  rrspBalance     = Number(rrspBalance) || 0;
+  tfsaBalance     = Number(tfsaBalance) || 0;
+  nonRegBalance   = Number(nonRegBalance) || 0;
+  homeEquity      = Number(homeEquity) || 0;
+  otherAssets     = Number(otherAssets) || 0;
+  debts           = Number(debts) || 0;
+  marginalTaxRate = Number(marginalTaxRate) || 0.30;
+
+  // Calculate after-tax values
+  var rrspAfterTax = rrspBalance * (1 - marginalTaxRate);
+  var tfsaAfterTax = tfsaBalance;  // Tax-free
+  // Non-reg: Assume 50% of balance is capital gain, with 50% inclusion rate
+  // Effective tax = marginalTaxRate * 0.5 (gain portion) * 0.5 (inclusion) = 0.25 * marginalTaxRate
+  var nonRegAfterTax = nonRegBalance * (1 - marginalTaxRate * 0.25);
+
+  var totalGross = rrspBalance + tfsaBalance + nonRegBalance + homeEquity + otherAssets - debts;
+  var totalAfterTax = rrspAfterTax + tfsaAfterTax + nonRegAfterTax + homeEquity + otherAssets - debts;
+
+  // Liquid vs illiquid
+  var liquidAssets = rrspBalance + tfsaBalance + nonRegBalance;
+  var illiquidAssets = homeEquity + otherAssets;
+
+  return [
+    ["Category", "Gross Value", "After-Tax Value"],
+    ["RRSP/RRIF", rrspBalance, Math.round(rrspAfterTax)],
+    ["TFSA", tfsaBalance, tfsaBalance],
+    ["Non-Registered", nonRegBalance, Math.round(nonRegAfterTax)],
+    ["Home Equity", homeEquity, homeEquity],
+    ["Other Assets", otherAssets, otherAssets],
+    ["Less: Debts", -debts, -debts],
+    ["─────────", "─────────", "─────────"],
+    ["TOTAL NET WORTH", Math.round(totalGross), Math.round(totalAfterTax)],
+    ["", "", ""],
+    ["Liquid Assets", liquidAssets, ""],
+    ["Illiquid Assets", illiquidAssets, ""]
+  ];
+}
+
+
+/**
+ * ----------------------------------------------------------------------
+ * SECTION 23 – Required Savings Rate Calculator
+ * ----------------------------------------------------------------------
+ *
+ * Calculates how much you need to save annually to reach your goal.
+ */
+
+/**
+ * REQUIRED_SAVINGS_RATE
+ *
+ * Calculates the annual savings needed to reach your retirement goal.
+ *
+ * @param {number} currentAge           Current age
+ * @param {number} retirementAge        Retirement age
+ * @param {number} currentSavings       Current total savings
+ * @param {number} targetSavings        Target savings at retirement
+ * @param {number} preRetRealReturn     Real return before retirement
+ *
+ * @return {number} Annual savings needed
+ *
+ * Example:
+ * =REQUIRED_SAVINGS_RATE(40, 65, 100000, 1000000, 0.04)
+ */
+function REQUIRED_SAVINGS_RATE(currentAge, retirementAge, currentSavings, targetSavings, preRetRealReturn) {
+  currentAge       = Number(currentAge);
+  retirementAge    = Number(retirementAge);
+  currentSavings   = Number(currentSavings);
+  targetSavings    = Number(targetSavings);
+  preRetRealReturn = Number(preRetRealReturn) || 0.04;
+
+  var years = retirementAge - currentAge;
+
+  if (years <= 0) {
+    return "ERROR: retirementAge must be > currentAge";
+  }
+
+  // Future value of current savings
+  var fvCurrent = currentSavings * Math.pow(1 + preRetRealReturn, years);
+
+  // Gap to fill with annual contributions
+  var gap = targetSavings - fvCurrent;
+
+  if (gap <= 0) {
+    return 0;  // Already on track with current savings
+  }
+
+  // PMT formula: gap = PMT * ((1+r)^n - 1) / r
+  if (Math.abs(preRetRealReturn) < 1e-8) {
+    return Math.round(gap / years);
+  }
+
+  var annuityFactor = (Math.pow(1 + preRetRealReturn, years) - 1) / preRetRealReturn;
+  var annualSavings = gap / annuityFactor;
+
+  return Math.round(annualSavings);
 }

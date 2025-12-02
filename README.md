@@ -6,6 +6,7 @@ This project provides a Google Apps Script file (`code.gs`) that plugs into a Go
 
 - **RRSP & TFSA** accumulation and decumulation modelling in **real (inflation-adjusted) dollars**
 - **CPP (Canada Pension Plan)** benefit calculator with early/late adjustment factors
+- **CPP Survivor Benefits** calculator for surviving spouses
 - **OAS (Old Age Security)** calculator with deferral bonuses and clawback calculations
 - **GIS (Guaranteed Income Supplement)** calculator for low-income retirees
 - **RRIF** mandatory minimum withdrawal calculator
@@ -13,6 +14,11 @@ This project provides a Google Apps Script file (`code.gs`) that plugs into a Go
 - **Non-registered account** support with capital gains tracking
 - **Contribution room tracking** for RRSP and TFSA
 - **Optimal withdrawal strategy** recommendations
+- **Pension income splitting** calculator for couples
+- **Estate tax planning** for RRSP/RRIF on death
+- **Retirement readiness score** - are you on track?
+- **Net worth summary** across all account types
+- **Required savings rate** calculator
 - A **constant real spending** engine that adjusts withdrawals to meet your target
 - Defined-benefit **pension projection** helper
 - **Life expectancy** planning age calculator
@@ -38,8 +44,13 @@ This project provides a Google Apps Script file (`code.gs`) that plugs into a Go
 11. [Contribution Room Tracking](#11-contribution-room-tracking)
 12. [Withdrawal Strategies](#12-withdrawal-strategies)
 13. [Input Validation](#13-input-validation)
-14. [Examples & Use Cases](#14-examples--use-cases)
-15. [Troubleshooting](#15-troubleshooting)
+14. [Retirement Readiness](#14-retirement-readiness)
+15. [CPP Survivor Benefits](#15-cpp-survivor-benefits)
+16. [Pension Income Splitting](#16-pension-income-splitting)
+17. [Estate Planning](#17-estate-planning)
+18. [Net Worth & Savings Rate](#18-net-worth--savings-rate)
+19. [Examples & Use Cases](#19-examples--use-cases)
+20. [Troubleshooting](#20-troubleshooting)
 
 ---
 
@@ -681,7 +692,197 @@ Validates common retirement planning inputs.
 
 ---
 
-## 14. Examples & Use Cases
+## 14. Retirement Readiness
+
+### RETIREMENT_SAVINGS_TARGET
+
+Calculates how much you need saved at retirement.
+
+```
+=RETIREMENT_SAVINGS_TARGET(desiredAnnualSpending, retirementAge, lifeExpectancy, otherAnnualIncome, postRetRealReturn)
+```
+
+**Parameters:**
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| desiredAnnualSpending | number | Target annual spending in retirement |
+| retirementAge | number | Age at retirement |
+| lifeExpectancy | number | Planning age |
+| otherAnnualIncome | number | CPP, OAS, pension income |
+| postRetRealReturn | number | Real return after retirement |
+
+**Example:**
+```
+=RETIREMENT_SAVINGS_TARGET(60000, 65, 90, 25000, 0.02)
+→ ~$700,000 savings needed
+```
+
+---
+
+### RETIREMENT_READINESS_SCORE
+
+Calculates whether you're on track for retirement.
+
+```
+=RETIREMENT_READINESS_SCORE(currentAge, retirementAge, lifeExpectancy, currentSavings,
+                            annualContribution, desiredAnnualSpending, otherAnnualIncome,
+                            preRetRealReturn, postRetRealReturn)
+```
+
+**Returns:** Table with:
+- Readiness Score (0-100%)
+- Status (On Track, Nearly There, Needs Attention, Significant Gap)
+- Target vs. Projected Savings
+- Surplus or Shortfall
+
+**Example:**
+```
+=RETIREMENT_READINESS_SCORE(40, 65, 90, 250000, 24000, 60000, 25000, 0.04, 0.02)
+```
+
+---
+
+### REQUIRED_SAVINGS_RATE
+
+Calculates how much you need to save annually to reach your goal.
+
+```
+=REQUIRED_SAVINGS_RATE(currentAge, retirementAge, currentSavings, targetSavings, preRetRealReturn)
+```
+
+**Example:**
+```
+=REQUIRED_SAVINGS_RATE(40, 65, 100000, 1000000, 0.04)
+→ ~$21,500/year needed
+```
+
+---
+
+## 15. CPP Survivor Benefits
+
+### CPP_SURVIVOR_BENEFIT
+
+Calculates CPP survivor pension for a surviving spouse.
+
+```
+=CPP_SURVIVOR_BENEFIT(deceasedCPP, survivorAge, survivorReceivesCPP, survivorCPP)
+```
+
+**Key Rules:**
+- Under 65: Flat rate (~$218) + 37.5% of deceased's pension
+- 65 and over: 60% of deceased's pension
+- Combined with own CPP cannot exceed maximum
+
+**Example:**
+```
+=CPP_SURVIVOR_BENEFIT(1000, 55, FALSE, 0)  → ~$593/month
+=CPP_SURVIVOR_BENEFIT(1000, 68, TRUE, 800) → ~$564/month (capped)
+```
+
+---
+
+### CPP_DEATH_BENEFIT
+
+Returns the CPP lump-sum death benefit.
+
+```
+=CPP_DEATH_BENEFIT()
+→ $2,500 (fixed amount)
+```
+
+---
+
+## 16. Pension Income Splitting
+
+### PENSION_INCOME_SPLIT
+
+Calculates optimal pension income splitting between spouses for tax savings.
+
+```
+=PENSION_INCOME_SPLIT(higherSpouseIncome, lowerSpouseIncome, eligiblePensionIncome, province)
+```
+
+**Key Rules:**
+- Up to 50% of eligible pension income can be split
+- Must be 65+ for RRIF/RRSP income
+- Any age for DB pension income
+
+**Returns:** Table showing:
+- Optimal split amount
+- Tax without splitting
+- Tax with optimal split
+- Annual tax savings
+
+**Example:**
+```
+=PENSION_INCOME_SPLIT(80000, 20000, 40000, "ON")
+→ Shows potential savings of ~$3,000-5,000/year
+```
+
+---
+
+## 17. Estate Planning
+
+### ESTATE_TAX_RRSP
+
+Calculates taxes owing when RRSP/RRIF is collapsed upon death.
+
+```
+=ESTATE_TAX_RRSP(rrspBalance, otherIncomeInYear, province, hasSpouse)
+```
+
+**Key Rules:**
+- Transfer to spouse: Tax-free rollover
+- No spouse: Full balance taxed as income in final return
+
+**Example:**
+```
+=ESTATE_TAX_RRSP(500000, 30000, "ON", FALSE)
+→ Shows ~$220,000 tax (44% effective rate on large balance)
+```
+
+---
+
+## 18. Net Worth & Savings Rate
+
+### NET_WORTH_SUMMARY
+
+Provides comprehensive net worth breakdown.
+
+```
+=NET_WORTH_SUMMARY(rrspBalance, tfsaBalance, nonRegBalance, homeEquity, 
+                   otherAssets, debts, marginalTaxRate)
+```
+
+**Returns:** Table showing:
+- Each asset category (gross and after-tax)
+- Total net worth
+- Liquid vs. illiquid assets
+
+**Example:**
+```
+=NET_WORTH_SUMMARY(400000, 100000, 50000, 300000, 30000, 10000, 0.35)
+```
+
+---
+
+### Inflation Calculators
+
+**FUTURE_VALUE_INFLATION** - What today's amount will need to be in the future:
+```
+=FUTURE_VALUE_INFLATION(50000, 25, 0.02)
+→ $82,030 (what $50,000 needs to be in 25 years)
+```
+
+**PRESENT_VALUE_INFLATION** - What a future amount is worth today:
+```
+=PRESENT_VALUE_INFLATION(100000, 25, 0.02)
+→ $60,953 (today's value of $100,000 in 25 years)
+```
+
+---
+
+## 19. Examples & Use Cases
 
 ### Example 1: Basic Retirement Projection
 
@@ -738,7 +939,7 @@ Set up a comprehensive model:
 
 ---
 
-## 15. Troubleshooting
+## 20. Troubleshooting
 
 ### Common Errors
 
