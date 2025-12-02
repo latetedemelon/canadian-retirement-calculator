@@ -2937,7 +2937,7 @@ function CPP_BREAKEVEN_AGE(benefit60, benefit65, benefit70) {
   // Calculate break-even: Age 65 vs Age 70
   var breakeven65vs70;
   if (benefit70 > benefit65) {
-    breakeven65vs70 = (70 * benefit70 - 65 * benefit65) / (benefit70 - benefit65);
+    breakeven65vs70 = (benefit65 * 65 - benefit70 * 70) / (benefit65 - benefit70);
     if (breakeven65vs70 < 70 || breakeven65vs70 > 100) {
       results.push(["Age 65 vs 70", "N/A", "", "No break-even within reasonable lifespan"]);
     } else {
