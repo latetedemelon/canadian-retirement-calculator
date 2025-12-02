@@ -100,8 +100,13 @@ function asBool_(v) {
  */
 function validateOption_(value, allowedList, paramName) {
   var v = (value || "").toString().trim().toLowerCase();
+  // Pre-process allowed list to lowercase for efficient comparison
+  var allowedLower = [];
   for (var i = 0; i < allowedList.length; i++) {
-    if (v === allowedList[i].toLowerCase()) {
+    allowedLower.push(allowedList[i].toLowerCase());
+  }
+  for (var j = 0; j < allowedLower.length; j++) {
+    if (v === allowedLower[j]) {
       return v;
     }
   }
@@ -1635,8 +1640,13 @@ function TAXABLE_ACCOUNT_GROWTH(
     // Pay tax from account
     balance -= capGainsTax;
 
-    // Adjust ACB for realized portion
-    acb += realizedGain - realizedGain; // ACB stays same for realized gains
+    // When gains are realized through turnover, the ACB increases proportionally
+    // to reflect that we've "sold high and bought back" at market value
+    var portionRealized = turnoverRate;
+    var acbRealized = acb * portionRealized;
+    var proceedsFromSale = (balance + capGainsTax) * portionRealized; // Value before tax payment
+    // New ACB = old ACB - ACB of sold portion + proceeds reinvested at new cost basis
+    acb = acb - acbRealized + (proceedsFromSale - capGainsTax / portionRealized * portionRealized);
 
     results.push([
       year,
@@ -1869,7 +1879,9 @@ function OPTIMAL_WITHDRAWAL_ORDER(rrspBalance, tfsaBalance, nonRegBalance, withd
 
   // Calculate tax impacts
   var rrspTax = fromRRSP > 0 ? ESTIMATE_TAX(otherIncome + fromRRSP, province) - ESTIMATE_TAX(otherIncome, province) : 0;
-  var nonRegTax = fromNonReg * 0.5 * MARGINAL_TAX_RATE(otherIncome, province) * 0.5; // Assume 50% is gain
+  // Assume 50% of non-reg withdrawal is capital gain, and 50% inclusion rate
+  // So taxable = withdrawal * 0.5 (gain portion) * 0.5 (inclusion) = 0.25
+  var nonRegTax = fromNonReg * 0.25 * MARGINAL_TAX_RATE(otherIncome, province);
   var tfsaTax = 0;
 
   if (fromRRSP > 0) {
