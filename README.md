@@ -52,7 +52,13 @@ This project provides a Google Apps Script file (`code.gs`) that plugs into a Go
 19. [Examples & Use Cases](#19-examples--use-cases)
 20. [Troubleshooting](#20-troubleshooting)
 21. [Calculation Accuracy Reference](#21-calculation-accuracy-reference)
-22. [Function Quick Reference](#22-function-quick-reference)
+22. [Bootstrap & Auto-Setup](#22-bootstrap--auto-setup)
+23. [Enhanced CPP Calculator](#23-enhanced-cpp-calculator)
+24. [Enhanced OAS Calculator](#24-enhanced-oas-calculator)
+25. [Safe Withdrawal Rate Calculator](#25-safe-withdrawal-rate-calculator)
+26. [Enhanced Tax Calculator for Seniors](#26-enhanced-tax-calculator-for-seniors)
+27. [Retirement Income Summary](#27-retirement-income-summary)
+28. [Function Quick Reference](#28-function-quick-reference)
 
 ---
 
@@ -1049,9 +1055,218 @@ See the [Calculation Accuracy Reference](#calculation-accuracy-reference) sectio
 
 ---
 
-## 22. Function Quick Reference
+## 22. Bootstrap & Auto-Setup
 
-### All 45+ Functions At a Glance
+### Automatic Sheet Creation
+
+The calculator now automatically creates required sheets when needed. You no longer need to manually run "Setup sheets" before using functions.
+
+**How it works:**
+- When the spreadsheet opens, INPUTS and OTHER_INCOME sheets are created if they don't exist
+- Key functions like `RETIREMENT_TARGET_SPEND_TABLE` automatically ensure required sheets exist
+- You can also use the custom function `=SETUP_RETIREMENT_CALCULATOR()` in any cell
+
+### SETUP_RETIREMENT_CALCULATOR
+
+A custom function that triggers setup from a cell.
+
+```
+=SETUP_RETIREMENT_CALCULATOR()
+→ "Setup complete! INPUTS and OTHER_INCOME sheets are ready."
+```
+
+### Updated Retirement Menu
+
+The Retirement menu now includes:
+- **Setup sheets (INPUTS & OTHER_INCOME)** - Manual setup
+- **Show CPP Comparison** - Inserts CPP comparison table at cursor
+- **Show OAS Comparison** - Inserts OAS comparison table at cursor
+
+---
+
+## 23. Enhanced CPP Calculator
+
+### CPP_ENHANCED_BENEFIT
+
+Calculates CPP including the enhanced portion for contributions after 2019.
+
+```
+=CPP_ENHANCED_BENEFIT(averageEarnings, contributionYears, yearsAfter2019, startAge)
+```
+
+**Parameters:**
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| averageEarnings | number | Average annual pensionable earnings |
+| contributionYears | number | Total years with CPP contributions |
+| yearsAfter2019 | number | Years of contributions after 2019 |
+| startAge | number | Age to start CPP (60-70) |
+
+**Example:**
+```
+=CPP_ENHANCED_BENEFIT(70000, 40, 5, 65)
+→ Includes enhanced benefit for 5 years of post-2019 contributions
+```
+
+**Key Points:**
+- Enhancement phases in over 40 years (2019-2059)
+- At full phase-in, provides up to 33% more retirement income
+- Enhancement is proportional to years of post-2019 contributions
+
+---
+
+### CPP_START_AGE_COMPARISON
+
+Creates a comparison table showing CPP benefits at different start ages.
+
+```
+=CPP_START_AGE_COMPARISON(averageEarnings, contributionYears)
+```
+
+**Returns:** Table comparing benefits at each age from 60-70 with cumulative totals
+
+**Example:**
+```
+=CPP_START_AGE_COMPARISON(65000, 35)
+```
+
+This shows:
+- Monthly and annual benefits at each age
+- Adjustment percentage from base
+- Cumulative payments at ages 80, 85, and 90
+
+---
+
+### CPP_BREAKEVEN_AGE
+
+Calculates break-even ages for CPP start timing decisions.
+
+```
+=CPP_BREAKEVEN_AGE(benefit60, benefit65, benefit70)
+```
+
+**Parameters:**
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| benefit60 | number | Monthly CPP if starting at 60 |
+| benefit65 | number | Monthly CPP if starting at 65 |
+| benefit70 | number | Monthly CPP if starting at 70 |
+
+**Example:**
+```
+=CPP_BREAKEVEN_AGE(600, 1000, 1420)
+→ Shows break-even ages: 60 vs 65, 65 vs 70, 60 vs 70
+```
+
+---
+
+## 24. Enhanced OAS Calculator
+
+### OAS_BREAKEVEN_AGE
+
+Calculates break-even ages for OAS deferral decisions.
+
+```
+=OAS_BREAKEVEN_AGE(yearsInCanada)
+```
+
+**Returns:** Table showing monthly benefits at each deferral age (65-70) with break-even points
+
+**Example:**
+```
+=OAS_BREAKEVEN_AGE(40)
+```
+
+This helps you decide:
+- Is deferring OAS worth it for your situation?
+- What age must you reach to benefit from deferral?
+
+---
+
+## 25. Safe Withdrawal Rate Calculator
+
+### SAFE_WITHDRAWAL_RATE
+
+Calculates sustainable withdrawals based on the 4% rule, adjusted for Canadian context.
+
+```
+=SAFE_WITHDRAWAL_RATE(portfolioValue, withdrawalRate, inflationRate, years)
+```
+
+**Parameters:**
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| portfolioValue | number | Current portfolio value |
+| withdrawalRate | number | Annual rate (e.g., 0.04 for 4%) |
+| inflationRate | number | Expected inflation rate |
+| years | number | Number of years to project |
+
+**Returns:** Year-by-year withdrawal schedule maintaining purchasing power
+
+**Example:**
+```
+=SAFE_WITHDRAWAL_RATE(1000000, 0.04, 0.02, 30)
+→ Shows 30-year withdrawal schedule with $40,000 first year
+```
+
+---
+
+## 26. Enhanced Tax Calculator for Seniors
+
+### ESTIMATE_TAX_WITH_CREDITS
+
+Enhanced tax estimation including senior-specific credits.
+
+```
+=ESTIMATE_TAX_WITH_CREDITS(taxableIncome, province, age, eligiblePensionIncome)
+```
+
+**Parameters:**
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| taxableIncome | number | Taxable income |
+| province | string | Province code |
+| age | number | Age (for age credit eligibility) |
+| eligiblePensionIncome | number | Eligible pension income |
+
+**Credits Applied:**
+- **Age Credit** (65+): Up to $8,396 federal (2024)
+- **Pension Income Credit**: Up to $2,000 of eligible pension income
+
+**Example:**
+```
+=ESTIMATE_TAX_WITH_CREDITS(60000, "ON", 68, 15000)
+→ Tax reduced by age and pension credits
+```
+
+---
+
+## 27. Retirement Income Summary
+
+### RETIREMENT_INCOME_SUMMARY
+
+Comprehensive income breakdown at a specific age.
+
+```
+=RETIREMENT_INCOME_SUMMARY(age, rrspBalance, tfsaBalance, province)
+```
+
+**Returns:** Detailed table showing:
+- Income from OTHER_INCOME sheet (taxable and non-taxable)
+- RRIF minimum withdrawal (if age 71+)
+- Tax calculation with senior credits
+- Net after-tax income (annual and monthly)
+
+**Example:**
+```
+=RETIREMENT_INCOME_SUMMARY(70, 500000, 100000, "ON")
+```
+
+---
+
+## 28. Function Quick Reference
+
+### All 55+ Functions At a Glance
 
 #### Core Retirement Projections
 | Function | Purpose | Accuracy |
@@ -1060,17 +1275,22 @@ See the [Calculation Accuracy Reference](#calculation-accuracy-reference) sectio
 | `RETIREMENT_TARGET_SPEND_TABLE` | Year-by-year spending plan | Exact math, estimated inputs |
 | `LIFE_EXPECTANCY_AGE` | Planning age based on health | Approximation |
 | `PENSION_INCOME_PROJECTED` | DB pension projection | Approximation |
+| `RETIREMENT_INCOME_SUMMARY` | Comprehensive income at an age | Exact math |
 
 #### Government Benefits
 | Function | Purpose | Accuracy |
 |----------|---------|----------|
 | `CPP_BENEFIT` | Monthly CPP estimate | Approximation |
 | `CPP_BENEFIT_DETAILED` | CPP with breakdown | Approximation |
+| `CPP_ENHANCED_BENEFIT` | CPP with post-2019 enhancement | Approximation |
+| `CPP_START_AGE_COMPARISON` | Compare CPP at different ages | Exact math |
+| `CPP_BREAKEVEN_AGE` | Break-even for CPP timing | Exact math |
 | `CPP_SURVIVOR_BENEFIT` | Survivor pension | Uses CRA rates |
 | `CPP_DEATH_BENEFIT` | Lump sum ($2,500) | Exact |
 | `OAS_BENEFIT` | Monthly OAS estimate | Approximation |
 | `OAS_CLAWBACK` | Recovery tax | Exact (15% rate) |
 | `OAS_BENEFIT_DETAILED` | OAS with breakdown | Approximation |
+| `OAS_BREAKEVEN_AGE` | Break-even for OAS timing | Exact math |
 | `GIS_BENEFIT` | Guaranteed Income Supplement | Approximation |
 
 #### RRIF & Withdrawals
@@ -1080,12 +1300,14 @@ See the [Calculation Accuracy Reference](#calculation-accuracy-reference) sectio
 | `RRIF_MIN_PERCENTAGE` | Minimum % by age | Exact |
 | `RRIF_SCHEDULE` | Multi-year RRIF plan | Exact rates, estimated returns |
 | `OPTIMAL_WITHDRAWAL_ORDER` | Tax-efficient order | Approximation |
+| `SAFE_WITHDRAWAL_RATE` | Sustainable withdrawal schedule | Exact math |
 
 #### Tax Calculations
 | Function | Purpose | Accuracy |
 |----------|---------|----------|
 | `ESTIMATE_TAX` | Federal + provincial tax | Exact brackets |
 | `ESTIMATE_TAX_DETAILED` | Tax breakdown | Exact brackets |
+| `ESTIMATE_TAX_WITH_CREDITS` | Tax with senior credits | Exact brackets |
 | `MARGINAL_TAX_RATE` | Combined marginal rate | Exact |
 | `CAPITAL_GAINS_TAX` | Tax on capital gains | Exact (2024 rules) |
 | `PENSION_INCOME_SPLIT` | Optimal splitting | Exact tax calc |
@@ -1113,12 +1335,11 @@ See the [Calculation Accuracy Reference](#calculation-accuracy-reference) sectio
 | `FUTURE_VALUE_INFLATION` | Inflation projection | Exact formula |
 | `PRESENT_VALUE_INFLATION` | Today's dollars | Exact formula |
 
-#### Validation & Helpers
+#### Setup & Utilities
 | Function | Purpose | Accuracy |
 |----------|---------|----------|
+| `SETUP_RETIREMENT_CALCULATOR` | Trigger setup from a cell | N/A |
 | `VALIDATE_RETIREMENT_INPUTS` | Check inputs | N/A |
-| `validateOption_` | Validate options | N/A |
-| `clamp_` | Clamp values | N/A |
 
 ### Accuracy Legend
 
