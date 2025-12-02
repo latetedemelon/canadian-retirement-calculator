@@ -3311,9 +3311,9 @@ function CPP_START_AGE_COMPARISON(averageEarnings, contributionYears) {
     var monthsFromNormal = (age - 65) * 12;
     var adjustment;
     if (monthsFromNormal < 0) {
-      adjustment = Math.round(monthsFromNormal * 0.6 * 10) / 10 + "%";
+      adjustment = Math.round(monthsFromNormal * CPP_2024.EARLY_REDUCTION_PER_MONTH * 100 * 10) / 10 + "%";
     } else if (monthsFromNormal > 0) {
-      adjustment = "+" + Math.round(monthsFromNormal * 0.7 * 10) / 10 + "%";
+      adjustment = "+" + Math.round(monthsFromNormal * CPP_2024.LATE_INCREASE_PER_MONTH * 100 * 10) / 10 + "%";
     } else {
       adjustment = "0% (base)";
     }
