@@ -1,3 +1,28 @@
+# Function Documentation
+
+This documentation provides detailed information about all functions available in the Canadian Retirement Calculator.
+
+## Documentation Pages
+
+| Page | Description |
+|------|-------------|
+| [Core Functions](CORE-FUNCTIONS.md) | RETIREMENT_INCOME, LIFE_EXPECTANCY_AGE, PENSION_INCOME_PROJECTED, RETIREMENT_TARGET_SPEND_TABLE |
+| [CPP Calculator](CPP.md) | CPP_BENEFIT, CPP_BENEFIT_DETAILED, CPP_SURVIVOR_BENEFIT, CPP_DEATH_BENEFIT |
+| [OAS Calculator](OAS.md) | OAS_BENEFIT, OAS_CLAWBACK, OAS_BENEFIT_DETAILED |
+| [GIS Calculator](GIS.md) | GIS_BENEFIT |
+| [RRIF Calculator](RRIF.md) | RRIF_MIN_WITHDRAWAL, RRIF_MIN_PERCENTAGE, RRIF_SCHEDULE |
+| [Tax Estimation](TAX.md) | ESTIMATE_TAX, ESTIMATE_TAX_DETAILED, MARGINAL_TAX_RATE |
+| [Non-Registered Accounts](NON-REGISTERED.md) | TAXABLE_ACCOUNT_GROWTH, CAPITAL_GAINS_TAX |
+| [Contribution Room](CONTRIBUTION-ROOM.md) | RRSP_CONTRIBUTION_ROOM, TFSA_CONTRIBUTION_ROOM |
+| [Withdrawal Strategies](WITHDRAWAL-STRATEGIES.md) | OPTIMAL_WITHDRAWAL_ORDER |
+| [Input Validation](VALIDATION.md) | VALIDATE_RETIREMENT_INPUTS |
+| [Retirement Readiness](RETIREMENT-READINESS.md) | RETIREMENT_SAVINGS_TARGET, RETIREMENT_READINESS_SCORE, REQUIRED_SAVINGS_RATE |
+| [Pension Income Splitting](PENSION-SPLITTING.md) | PENSION_INCOME_SPLIT |
+| [Estate Planning](ESTATE-PLANNING.md) | ESTATE_TAX_RRSP |
+| [Net Worth & Inflation](NET-WORTH.md) | NET_WORTH_SUMMARY, FUTURE_VALUE_INFLATION, PRESENT_VALUE_INFLATION |
+| [Examples & Use Cases](EXAMPLES.md) | Practical examples and common scenarios |
+| [Troubleshooting](TROUBLESHOOTING.md) | Common errors and solutions |
+| [Calculation Accuracy](ACCURACY.md) | Which calculations are exact vs. approximations |
 [← Back to README](../README.md)
 
 # Function Documentation

@@ -2,6 +2,7 @@
 
 # Withdrawal Strategies
 
+This page documents the withdrawal strategy optimization function.
 Functions for tax-efficient retirement withdrawals.
 
 ---
@@ -14,6 +15,12 @@ Suggests tax-efficient withdrawal order across accounts.
 =OPTIMAL_WITHDRAWAL_ORDER(rrspBalance, tfsaBalance, nonRegBalance, 
                           withdrawalNeeded, otherIncome, province)
 ```
+
+### Returns
+
+Table with recommended withdrawal from each account type and tax impact
+
+### Strategy Applied
 
 **Parameters:**
 | Parameter | Type | Description |

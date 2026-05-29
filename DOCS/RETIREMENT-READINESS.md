@@ -48,6 +48,16 @@ Calculates whether you're on track for retirement.
                             preRetRealReturn, postRetRealReturn)
 ```
 
+### Returns
+
+Table with:
+- Readiness Score (0-100%)
+- Status (On Track, Nearly There, Needs Attention, Significant Gap)
+- Target vs. Projected Savings
+- Surplus or Shortfall
+
+### Example
+
 **Parameters:**
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -90,6 +100,8 @@ Calculates how much you need to save annually to reach your goal.
 ```
 =REQUIRED_SAVINGS_RATE(currentAge, retirementAge, currentSavings, targetSavings, preRetRealReturn)
 ```
+
+### Example
 
 **Parameters:**
 | Parameter | Type | Description |

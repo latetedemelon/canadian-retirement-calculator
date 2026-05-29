@@ -1,5 +1,8 @@
 [← Back to Index](INDEX.md)
 
+# Net Worth & Inflation Calculators
+
+This page documents the net worth summary and inflation calculation functions.
 # Net Worth & Savings Rate
 
 Functions for calculating net worth and inflation adjustments.
@@ -14,6 +17,15 @@ Provides comprehensive net worth breakdown.
 =NET_WORTH_SUMMARY(rrspBalance, tfsaBalance, nonRegBalance, homeEquity, 
                    otherAssets, debts, marginalTaxRate)
 ```
+
+### Returns
+
+Table showing:
+- Each asset category (gross and after-tax)
+- Total net worth
+- Liquid vs. illiquid assets
+
+### Example
 
 **Parameters:**
 | Parameter | Type | Description |
@@ -54,6 +66,13 @@ Calculates what today's amount will need to be in the future to maintain purchas
 =FUTURE_VALUE_INFLATION(presentValue, years, inflationRate)
 ```
 
+### Example
+
+```
+=FUTURE_VALUE_INFLATION(50000, 25, 0.02)
+→ $82,030 (what $50,000 needs to be in 25 years)
+```
+
 **Parameters:**
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -85,6 +104,8 @@ Calculates what a future amount is worth in today's dollars.
 ```
 =PRESENT_VALUE_INFLATION(futureValue, years, inflationRate)
 ```
+
+### Example
 
 **Parameters:**
 | Parameter | Type | Description |

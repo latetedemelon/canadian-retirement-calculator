@@ -165,13 +165,11 @@ The wizard creates an **INPUTS** sheet with these fields:
 | 11 | Inflation rate | 0.02 | Expected inflation (2%) |
 | 12 | Target spend (annual) | 60,000 | Your target annual spending in retirement |
 
-**How to use:**
-1. Replace the default values in column B with your actual numbers
-2. Reference these cells in formulas (e.g., `=B2` for current age)
+Replace the default values in column B with your actual numbers, then reference these cells in formulas.
 
 #### OTHER_INCOME Sheet
 
-The wizard creates an **OTHER_INCOME** sheet for additional income sources:
+The wizard creates an **OTHER_INCOME** sheet for additional income sources (CPP, OAS, pensions, rental income, etc.):
 
 | Column | Header | Description |
 |--------|--------|-------------|
@@ -581,6 +579,5 @@ Contributions are welcome! Please ensure:
 
 ---
 
-## License
-
-MIT License – See LICENSE file for details
+> ⚠️ **Disclaimer:** This is an educational tool, not financial or tax advice.  
+> Always verify results against official sources (CRA, Service Canada, plan documents) and/or a professional advisor before making decisions.

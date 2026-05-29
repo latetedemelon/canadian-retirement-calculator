@@ -2,6 +2,7 @@
 
 # OAS Calculator
 
+This page documents the Old Age Security (OAS) calculation functions.
 Functions for calculating Old Age Security benefits.
 
 ---
