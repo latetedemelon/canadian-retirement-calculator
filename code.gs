@@ -416,6 +416,8 @@ function ensureOtherIncomeSheet_() {
  */
 function getOtherIncomeForAge_(age) {
   age = Number(age);
+  // Ensure the OTHER_INCOME sheet exists before trying to read from it
+  ensureOtherIncomeSheet_();
   var ss = SpreadsheetApp.getActive();
   var sheet = ss.getSheetByName('OTHER_INCOME');
   if (!sheet) {
@@ -519,6 +521,9 @@ function RETIREMENT_TARGET_SPEND_TABLE(
   inflationRate,
   targetAnnualSpending
 ) {
+  // Ensure OTHER_INCOME sheet exists before reading from it
+  ensureOtherIncomeSheet_();
+
   currentAge             = Number(currentAge);
   retirementAge          = Number(retirementAge);
   lifeExpectancyAge      = Number(lifeExpectancyAge);
@@ -678,22 +683,82 @@ function ensureInputsSheet_() {
 }
 
 /**
+ * Ensure all required sheets exist for the retirement calculator.
+ * This is called automatically on open and by key functions.
+ */
+function ensureRequiredSheets_() {
+  ensureInputsSheet_();
+  ensureOtherIncomeSheet_();
+}
+
+/**
  * Creates / verifies both INPUTS and OTHER_INCOME sheets.
  */
 function setupRetirementSheets() {
-  ensureInputsSheet_();
-  ensureOtherIncomeSheet_();
+  ensureRequiredSheets_();
   SpreadsheetApp.getActive().toast('INPUTS and OTHER_INCOME sheets are ready.');
+}
+
+/**
+ * SETUP_RETIREMENT_CALCULATOR
+ *
+ * Custom function to trigger setup from a cell.
+ * Ensures INPUTS and OTHER_INCOME sheets exist.
+ *
+ * @return {string} Setup confirmation message
+ * @customfunction
+ *
+ * Example:
+ * =SETUP_RETIREMENT_CALCULATOR()
+ */
+function SETUP_RETIREMENT_CALCULATOR() {
+  try {
+    ensureRequiredSheets_();
+    // Verify sheets were created successfully
+    var ss = SpreadsheetApp.getActive();
+    var inputsSheet = ss.getSheetByName('INPUTS');
+    var otherIncomeSheet = ss.getSheetByName('OTHER_INCOME');
+    if (inputsSheet && otherIncomeSheet) {
+      return "Setup complete! INPUTS and OTHER_INCOME sheets are ready.";
+    } else {
+      return "Setup incomplete. Please try running Retirement > Setup sheets from the menu.";
+    }
+  } catch (e) {
+    return "Setup failed: " + e.message;
+  }
 }
 
 /**
  * Add a custom menu on open.
  */
 function onOpen() {
+  ensureRequiredSheets_();
   var ui = SpreadsheetApp.getUi();
   ui.createMenu('Retirement')
     .addItem('Setup sheets (INPUTS & OTHER_INCOME)', 'setupRetirementSheets')
+    .addItem('Show CPP Comparison', 'insertCPPComparison_')
+    .addItem('Show OAS Comparison', 'insertOASComparison_')
     .addToUi();
+}
+
+/**
+ * Insert CPP comparison table at cursor position.
+ */
+function insertCPPComparison_() {
+  var sheet = SpreadsheetApp.getActiveSheet();
+  var cell = sheet.getActiveCell();
+  var formula = '=CPP_START_AGE_COMPARISON(60000, 35)';
+  cell.setFormula(formula);
+}
+
+/**
+ * Insert OAS comparison table at cursor position.
+ */
+function insertOASComparison_() {
+  var sheet = SpreadsheetApp.getActiveSheet();
+  var cell = sheet.getActiveCell();
+  var formula = '=OAS_BREAKEVEN_AGE(40)';
+  cell.setFormula(formula);
 }
 
 
@@ -889,6 +954,18 @@ var OAS_2024 = {
   DEFERRAL_BONUS_PER_MONTH: 0.006,  // 0.6% per month
   CLAWBACK_THRESHOLD: 86912,        // 2024 recovery tax threshold
   CLAWBACK_RATE: 0.15               // 15% recovery rate above threshold
+};
+
+/**
+ * Tax credit constants for 2024
+ * Used by ESTIMATE_TAX_WITH_CREDITS for senior tax credits
+ */
+var TAX_CREDITS_2024 = {
+  FEDERAL_AGE_AMOUNT: 8396,                // Federal age amount for 65+
+  FEDERAL_AGE_INCOME_THRESHOLD: 42335,     // Income threshold for age amount reduction
+  FEDERAL_AGE_CLAWBACK_RATE: 0.15,         // 15% reduction above threshold
+  FEDERAL_PENSION_CREDIT_MAX: 2000,        // Maximum pension income credit
+  FEDERAL_LOWEST_RATE: 0.15                // Federal lowest tax bracket rate
 };
 
 /**
@@ -2527,4 +2604,747 @@ function REQUIRED_SAVINGS_RATE(currentAge, retirementAge, currentSavings, target
   var annualSavings = gap / annuityFactor;
 
   return Math.round(annualSavings);
+}
+
+
+/**
+ * ----------------------------------------------------------------------
+ * SECTION 24 – Enhanced CPP Benefit (Post-2019 Enhancement)
+ * ----------------------------------------------------------------------
+ *
+ * The CPP enhancement increases the base replacement rate from 25% to 33.33%
+ * of average earnings up to the YMPE, and adds a second tier (YAMPE) covering
+ * earnings between 100% and 114% of YMPE with an additional 8.33% replacement rate.
+ * The enhancement is phased in for contributions after 2019 and only applies to those years.
+ */
+
+/**
+ * CPP_ENHANCED_BENEFIT
+ *
+ * Calculates CPP including the enhanced portion for contributions after 2019.
+ * The CPP enhancement increases the replacement rate from 25% to 33.33% of 
+ * average earnings up to the YMPE, and adds a second tier (YAMPE) for earnings 
+ * between 100% and 114% of YMPE with an additional 8.33% replacement rate.
+ * The enhancement only applies to contributions made after 2019.
+ *
+ * Note: This is a simplified estimate. The actual CPP enhancement calculation
+ * is complex and depends on your specific earnings history. For accurate 
+ * estimates, use your My Service Canada Account statement.
+ *
+ * @param {number} averageEarnings    Average annual pensionable earnings
+ * @param {number} contributionYears  Total years with CPP contributions
+ * @param {number} yearsAfter2019     Years of contributions after 2019
+ * @param {number} startAge           Age to start CPP (60-70)
+ * @return {number} Estimated monthly CPP benefit including enhancement
+ *
+ * Example:
+ * =CPP_ENHANCED_BENEFIT(70000, 40, 5, 65)
+ */
+function CPP_ENHANCED_BENEFIT(averageEarnings, contributionYears, yearsAfter2019, startAge) {
+  averageEarnings   = Number(averageEarnings);
+  contributionYears = Number(contributionYears);
+  yearsAfter2019    = Number(yearsAfter2019);
+  startAge          = Number(startAge);
+
+  // Input validation
+  if (averageEarnings < 0) {
+    return "ERROR: averageEarnings must be >= 0";
+  }
+  if (contributionYears < 0) {
+    return "ERROR: contributionYears must be >= 0";
+  }
+  if (yearsAfter2019 < 0) {
+    return "ERROR: yearsAfter2019 must be >= 0";
+  }
+  if (startAge < CPP_2024.MIN_START_AGE || startAge > CPP_2024.MAX_START_AGE) {
+    return "ERROR: startAge must be between 60 and 70";
+  }
+
+  // Cap contribution years
+  var effectiveYears = Math.min(contributionYears, CPP_2024.CONTRIBUTION_YEARS_FOR_MAX);
+  var yearsRatio = effectiveYears / CPP_2024.CONTRIBUTION_YEARS_FOR_MAX;
+
+  // Enhanced CPP calculation - phases in over 40 years (2019-2059)
+  var maxEnhancementYears = 40;
+  var effectiveEnhancementYears = Math.min(yearsAfter2019, maxEnhancementYears);
+  var enhancementPhaseIn = effectiveEnhancementYears / maxEnhancementYears;
+
+  // Calculate base CPP (25% replacement rate on earnings up to YMPE)
+  var earningsUpToYMPE = Math.min(averageEarnings, CPP_2024.YMPE);
+  var baseReplacementRate = 0.25;
+  var baseBenefitAt65 = (earningsUpToYMPE / 12) * baseReplacementRate * yearsRatio;
+
+  // Enhanced portion: additional 8.33% (33.33% - 25%) on earnings up to YMPE
+  // Only applies proportionally to years after 2019
+  var enhancementRate = 0.0833 * enhancementPhaseIn;
+  var enhancedPortion = (earningsUpToYMPE / 12) * enhancementRate * yearsRatio;
+
+  // Second tier (YAMPE): 8.33% on earnings between YMPE and YAMPE (114% of YMPE)
+  // This only applies to contributions after 2019
+  var YAMPE = CPP_2024.YMPE * 1.14;
+  var earningsInSecondTier = Math.min(Math.max(0, averageEarnings - CPP_2024.YMPE), YAMPE - CPP_2024.YMPE);
+  var secondTierRate = 0.0833 * enhancementPhaseIn;
+  var secondTierPortion = (earningsInSecondTier / 12) * secondTierRate * yearsRatio;
+
+  // Total benefit at age 65
+  var totalBenefitAt65 = baseBenefitAt65 + enhancedPortion + secondTierPortion;
+
+  // Apply start age adjustment
+  var monthsFromNormal = (startAge - CPP_2024.NORMAL_AGE) * 12;
+  var adjustment;
+  if (monthsFromNormal < 0) {
+    // Early (before 65): reduce by 0.6% per month
+    adjustment = 1 + (monthsFromNormal * CPP_2024.EARLY_REDUCTION_PER_MONTH);
+  } else if (monthsFromNormal > 0) {
+    // Late (after 65): increase by 0.7% per month
+    adjustment = 1 + (monthsFromNormal * CPP_2024.LATE_INCREASE_PER_MONTH);
+  } else {
+    adjustment = 1;
+  }
+
+  var monthlyBenefit = totalBenefitAt65 * adjustment;
+
+  return Math.round(monthlyBenefit * 100) / 100;
+}
+
+
+/**
+ * ----------------------------------------------------------------------
+ * SECTION 25 – Withdrawal Schedule Calculator
+ * ----------------------------------------------------------------------
+ *
+ * Projects portfolio withdrawals over time with inflation adjustments
+ * and tracks remaining portfolio balance.
+ */
+
+/**
+ * WITHDRAWAL_SCHEDULE
+ *
+ * Projects year-by-year withdrawals from a portfolio, tracking both
+ * the withdrawal amounts (adjusted for inflation) and remaining 
+ * portfolio balance. Helps visualize the sustainability of your
+ * withdrawal strategy.
+ *
+ * @param {number} portfolioValue   Current portfolio value
+ * @param {number} withdrawalRate   Initial annual withdrawal rate (e.g., 0.04 for 4%)
+ * @param {number} inflationRate    Expected inflation rate
+ * @param {number} nominalReturn    Expected nominal investment return
+ * @param {number} years            Number of years to project
+ * @return {Array[]} Year-by-year schedule with withdrawals and portfolio balance
+ *
+ * Example:
+ * =WITHDRAWAL_SCHEDULE(1000000, 0.04, 0.02, 0.06, 30)
+ */
+function WITHDRAWAL_SCHEDULE(portfolioValue, withdrawalRate, inflationRate, nominalReturn, years) {
+  portfolioValue = Number(portfolioValue);
+  withdrawalRate = Number(withdrawalRate);
+  inflationRate  = Number(inflationRate);
+  nominalReturn  = Number(nominalReturn) || 0.05;
+  years          = Number(years);
+
+  // Input validation
+  if (portfolioValue <= 0) {
+    return [["ERROR: portfolioValue must be > 0"]];
+  }
+  if (withdrawalRate <= 0 || withdrawalRate > 1) {
+    return [["ERROR: withdrawalRate must be between 0 and 1"]];
+  }
+  if (years <= 0) {
+    return [["ERROR: years must be > 0"]];
+  }
+
+  var results = [["Year", "Withdrawal", "Portfolio Start", "Portfolio End", "Sustainable?"]];
+
+  var initialWithdrawal = portfolioValue * withdrawalRate;
+  var balance = portfolioValue;
+  var depleted = false;
+  var depletionYear = 0;
+
+  for (var year = 1; year <= years; year++) {
+    var portfolioStart = balance;
+    
+    // Withdrawal increases with inflation to maintain purchasing power (nominal dollars)
+    var withdrawal = initialWithdrawal * Math.pow(1 + inflationRate, year - 1);
+    
+    // Check if portfolio is depleted
+    if (balance <= 0 || depleted) {
+      if (!depleted) {
+        depletionYear = year;
+        depleted = true;
+      }
+      results.push([
+        year,
+        0,
+        0,
+        0,
+        "DEPLETED in year " + depletionYear
+      ]);
+      continue;
+    }
+
+    // Withdraw at start of year
+    var actualWithdrawal = Math.min(withdrawal, balance);
+    balance -= actualWithdrawal;
+
+    // Apply investment return on remaining balance (nominal return)
+    balance = balance * (1 + nominalReturn);
+
+    var sustainable = balance > 0 ? "Yes" : "No - depleted";
+    if (balance > portfolioValue) {
+      sustainable = "Yes - growing";
+    }
+
+    results.push([
+      year,
+      Math.round(actualWithdrawal),
+      Math.round(portfolioStart),
+      Math.round(balance),
+      sustainable
+    ]);
+
+    if (balance <= 0) {
+      depleted = true;
+      depletionYear = year;
+    }
+  }
+
+  // Add summary
+  results.push(["", "", "", "", ""]);
+  if (depleted) {
+    results.push(["WARNING:", "Portfolio depletes in year " + depletionYear, "", "", ""]);
+    results.push(["Suggestion:", "Reduce withdrawal rate or increase returns", "", "", ""]);
+  } else {
+    results.push(["SUCCESS:", "Portfolio sustainable for " + years + " years", "", "", ""]);
+    results.push(["Final Balance:", "$" + Math.round(balance).toLocaleString(), "", "", ""]);
+  }
+
+  return results;
+}
+
+/**
+ * SAFE_WITHDRAWAL_RATE (Deprecated - use WITHDRAWAL_SCHEDULE instead)
+ *
+ * Simple inflation-adjusted withdrawal schedule. Does not track portfolio
+ * balance or validate sustainability. For a complete analysis, use
+ * WITHDRAWAL_SCHEDULE instead.
+ *
+ * @param {number} portfolioValue   Current portfolio value
+ * @param {number} withdrawalRate   Annual withdrawal rate (e.g., 0.04 for 4%)
+ * @param {number} inflationRate    Expected inflation rate
+ * @param {number} years            Number of years to project
+ * @return {Array[]} Year-by-year withdrawal schedule
+ *
+ * Example:
+ * =SAFE_WITHDRAWAL_RATE(1000000, 0.04, 0.02, 30)
+ */
+function SAFE_WITHDRAWAL_RATE(portfolioValue, withdrawalRate, inflationRate, years) {
+  portfolioValue = Number(portfolioValue);
+  withdrawalRate = Number(withdrawalRate);
+  inflationRate  = Number(inflationRate);
+  years          = Number(years);
+
+  // Input validation
+  if (portfolioValue <= 0) {
+    return [["ERROR: portfolioValue must be > 0"]];
+  }
+  if (withdrawalRate <= 0 || withdrawalRate > 1) {
+    return [["ERROR: withdrawalRate must be between 0 and 1"]];
+  }
+  if (years <= 0) {
+    return [["ERROR: years must be > 0"]];
+  }
+
+  var results = [["Year", "Withdrawal (Nominal)", "Withdrawal (Real)", "Cumulative Withdrawn", "Notes"]];
+
+  var initialWithdrawal = portfolioValue * withdrawalRate;
+  var cumulativeWithdrawn = 0;
+
+  for (var year = 1; year <= years; year++) {
+    // Withdrawal increases with inflation to maintain purchasing power
+    var nominalWithdrawal = initialWithdrawal * Math.pow(1 + inflationRate, year - 1);
+    var realWithdrawal = initialWithdrawal; // Constant in real terms
+    cumulativeWithdrawn += nominalWithdrawal;
+
+    var notes = "";
+    if (year === 1) {
+      notes = "Initial withdrawal: " + Math.round(withdrawalRate * 100 * 10) / 10 + "% of portfolio";
+    } else if (year === 10) {
+      notes = "10-year milestone";
+    } else if (year === 20) {
+      notes = "20-year milestone";
+    } else if (year === 30) {
+      notes = "30-year milestone";
+    }
+
+    results.push([
+      year,
+      Math.round(nominalWithdrawal),
+      Math.round(realWithdrawal),
+      Math.round(cumulativeWithdrawn),
+      notes
+    ]);
+  }
+
+  return results;
+}
+
+
+/**
+ * ----------------------------------------------------------------------
+ * SECTION 26 – CPP/OAS Break-Even Age Calculators
+ * ----------------------------------------------------------------------
+ *
+ * Calculates the age at which delaying CPP/OAS becomes more valuable
+ * than taking it early.
+ */
+
+/**
+ * CPP_BREAKEVEN_AGE
+ *
+ * Calculates the age at which delaying CPP becomes more valuable than
+ * taking it early. Helps users decide optimal CPP start age.
+ *
+ * @param {number} benefit60    Monthly CPP if starting at 60
+ * @param {number} benefit65    Monthly CPP if starting at 65
+ * @param {number} benefit70    Monthly CPP if starting at 70
+ * @return {Array[]} Break-even analysis table
+ *
+ * Example:
+ * =CPP_BREAKEVEN_AGE(600, 1000, 1420)
+ */
+function CPP_BREAKEVEN_AGE(benefit60, benefit65, benefit70) {
+  benefit60 = Number(benefit60);
+  benefit65 = Number(benefit65);
+  benefit70 = Number(benefit70);
+
+  // Input validation
+  if (benefit60 < 0 || benefit65 < 0 || benefit70 < 0) {
+    return [["ERROR: All benefits must be >= 0"]];
+  }
+
+  var results = [["Comparison", "Break-Even Age", "Cumulative at Break-Even", "Notes"]];
+
+  // Calculate break-even: Age 60 vs Age 65
+  // At break-even: 60_benefit * (age - 60) * 12 = 65_benefit * (age - 65) * 12
+  // Solving: age = (benefit60 * 60 - benefit65 * 65) / (benefit65 - benefit60)
+  var breakeven60vs65;
+  if (benefit65 > benefit60) {
+    breakeven60vs65 = (benefit60 * 60 - benefit65 * 65) / (benefit65 - benefit60);
+    // Check if break-even is reasonable
+    if (breakeven60vs65 < 65 || breakeven60vs65 > 100) {
+      results.push(["Age 60 vs 65", "N/A", "", "No break-even within reasonable lifespan"]);
+    } else {
+      var cumulative60at65be = benefit60 * 12 * (breakeven60vs65 - 60);
+      results.push([
+        "Age 60 vs 65",
+        Math.round(breakeven60vs65 * 10) / 10,
+        "$" + Math.round(cumulative60at65be).toLocaleString(),
+        "Before this age, starting at 60 is better"
+      ]);
+    }
+  } else {
+    results.push(["Age 60 vs 65", "Never", "", "Starting at 60 always better"]);
+  }
+
+  // Calculate break-even: Age 65 vs Age 70
+  var breakeven65vs70;
+  if (benefit70 > benefit65) {
+    breakeven65vs70 = (benefit65 * 65 - benefit70 * 70) / (benefit65 - benefit70);
+    if (breakeven65vs70 < 70 || breakeven65vs70 > 100) {
+      results.push(["Age 65 vs 70", "N/A", "", "No break-even within reasonable lifespan"]);
+    } else {
+      var cumulative65at70be = benefit65 * 12 * (breakeven65vs70 - 65);
+      results.push([
+        "Age 65 vs 70",
+        Math.round(breakeven65vs70 * 10) / 10,
+        "$" + Math.round(cumulative65at70be).toLocaleString(),
+        "Before this age, starting at 65 is better"
+      ]);
+    }
+  } else {
+    results.push(["Age 65 vs 70", "Never", "", "Starting at 65 always better"]);
+  }
+
+  // Calculate break-even: Age 60 vs Age 70
+  var breakeven60vs70;
+  if (benefit70 > benefit60) {
+    breakeven60vs70 = (benefit60 * 60 - benefit70 * 70) / (benefit70 - benefit60);
+    if (breakeven60vs70 < 70 || breakeven60vs70 > 100) {
+      results.push(["Age 60 vs 70", "N/A", "", "No break-even within reasonable lifespan"]);
+    } else {
+      var cumulative60at70be = benefit60 * 12 * (breakeven60vs70 - 60);
+      results.push([
+        "Age 60 vs 70",
+        Math.round(breakeven60vs70 * 10) / 10,
+        "$" + Math.round(cumulative60at70be).toLocaleString(),
+        "Before this age, starting at 60 is better"
+      ]);
+    }
+  } else {
+    results.push(["Age 60 vs 70", "Never", "", "Starting at 60 always better"]);
+  }
+
+  // Add summary
+  results.push(["", "", "", ""]);
+  results.push(["Monthly Benefits:", "", "", ""]);
+  results.push(["At Age 60", "$" + benefit60, "", "(36% reduction from 65)"]);
+  results.push(["At Age 65", "$" + benefit65, "", "(standard amount)"]);
+  results.push(["At Age 70", "$" + benefit70, "", "(42% increase from 65)"]);
+
+  return results;
+}
+
+/**
+ * OAS_BREAKEVEN_AGE
+ *
+ * Calculates the age at which delaying OAS becomes more valuable than
+ * taking it at 65.
+ *
+ * @param {number} yearsInCanada    Years of Canadian residence after age 18 (max 40)
+ * @return {Array[]} Break-even analysis table
+ *
+ * Example:
+ * =OAS_BREAKEVEN_AGE(40)
+ */
+function OAS_BREAKEVEN_AGE(yearsInCanada) {
+  yearsInCanada = Number(yearsInCanada);
+
+  // Input validation
+  if (yearsInCanada < OAS_2024.MIN_RESIDENCE_YEARS) {
+    return [["ERROR: Minimum 10 years residence required for OAS"]];
+  }
+
+  // Cap years at maximum (40 years for full OAS)
+  yearsInCanada = Math.min(yearsInCanada, OAS_2024.FULL_RESIDENCE_YEARS);
+
+  // Calculate OAS at different start ages
+  var benefit65 = OAS_BENEFIT(yearsInCanada, 65, 65);
+  var benefit66 = OAS_BENEFIT(yearsInCanada, 66, 66);
+  var benefit67 = OAS_BENEFIT(yearsInCanada, 67, 67);
+  var benefit68 = OAS_BENEFIT(yearsInCanada, 68, 68);
+  var benefit69 = OAS_BENEFIT(yearsInCanada, 69, 69);
+  var benefit70 = OAS_BENEFIT(yearsInCanada, 70, 70);
+
+  if (typeof benefit65 === 'string') {
+    return [[benefit65]];
+  }
+
+  var results = [["Start Age", "Monthly Benefit", "Deferral Bonus", "Break-Even vs 65", "Notes"]];
+
+  // Age 65 (baseline)
+  results.push([65, "$" + Math.round(benefit65 * 100) / 100, "0%", "-", "Baseline - earliest start"]);
+
+  // Calculate break-even for each deferral option vs 65
+  var deferralAges = [66, 67, 68, 69, 70];
+  var benefits = [benefit66, benefit67, benefit68, benefit69, benefit70];
+
+  for (var i = 0; i < deferralAges.length; i++) {
+    var age = deferralAges[i];
+    var benefit = benefits[i];
+    var deferralMonths = (age - 65) * 12;
+    var deferralBonus = deferralMonths * 0.6;
+
+    // Break-even calculation
+    // At break-even: benefit65 * (breakeven - 65) * 12 = benefit * (breakeven - age) * 12
+    var breakeven;
+    if (benefit > benefit65) {
+      breakeven = (benefit65 * 65 - benefit * age) / (benefit - benefit65);
+      if (breakeven < age || breakeven > 100) {
+        breakeven = "N/A";
+      } else {
+        breakeven = Math.round(breakeven * 10) / 10;
+      }
+    } else {
+      breakeven = "Never";
+    }
+
+    var notes = "";
+    if (age === 70) {
+      notes = "Maximum deferral (36% bonus)";
+    }
+
+    results.push([
+      age,
+      "$" + Math.round(benefit * 100) / 100,
+      deferralBonus + "%",
+      breakeven,
+      notes
+    ]);
+  }
+
+  // Add key insight
+  results.push(["", "", "", "", ""]);
+  results.push(["Key Insight:", "", "", "", "If you expect to live past the break-even age, deferral is beneficial"]);
+
+  return results;
+}
+
+
+/**
+ * ----------------------------------------------------------------------
+ * SECTION 27 – Enhanced Tax Estimation with Senior Credits
+ * ----------------------------------------------------------------------
+ *
+ * Enhanced tax estimation including age credit and pension income credit.
+ */
+
+/**
+ * ESTIMATE_TAX_WITH_CREDITS
+ *
+ * Enhanced tax estimation including:
+ * - Age Credit (for 65+): $8,396 federal (2024)
+ * - Pension Income Credit: Up to $2,000 of eligible pension income
+ *
+ * @param {number} taxableIncome           Taxable income
+ * @param {string} province                Province code
+ * @param {number} age                     Age of taxpayer (for age credit eligibility)
+ * @param {number} eligiblePensionIncome   Eligible pension income for pension credit
+ * @return {number} Estimated tax after credits
+ *
+ * Example:
+ * =ESTIMATE_TAX_WITH_CREDITS(60000, "ON", 68, 15000)
+ */
+function ESTIMATE_TAX_WITH_CREDITS(taxableIncome, province, age, eligiblePensionIncome) {
+  taxableIncome          = Number(taxableIncome);
+  province               = (province || "ON").toString().trim().toUpperCase();
+  age                    = Number(age) || 0;
+  eligiblePensionIncome  = Number(eligiblePensionIncome) || 0;
+
+  if (taxableIncome < 0) {
+    return "ERROR: taxableIncome must be >= 0";
+  }
+
+  if (!PROVINCIAL_TAX_2024[province]) {
+    return "ERROR: Province not supported. Use: ON, BC, AB, QC, SK, MB, NS, NB, PE, NL, YT, NT, NU";
+  }
+
+  // Start with base tax calculation
+  var baseTax = ESTIMATE_TAX(taxableIncome, province);
+  if (typeof baseTax === 'string') {
+    return baseTax;
+  }
+
+  var totalCredits = 0;
+
+  // Age Credit (federal) - for age 65+
+  if (age >= 65) {
+    var ageAmount = TAX_CREDITS_2024.FEDERAL_AGE_AMOUNT;
+
+    // Age amount is reduced if income exceeds threshold
+    if (taxableIncome > TAX_CREDITS_2024.FEDERAL_AGE_INCOME_THRESHOLD) {
+      var reduction = (taxableIncome - TAX_CREDITS_2024.FEDERAL_AGE_INCOME_THRESHOLD) * TAX_CREDITS_2024.FEDERAL_AGE_CLAWBACK_RATE;
+      ageAmount = Math.max(0, ageAmount - reduction);
+    }
+
+    // Convert age amount to credit at lowest federal rate
+    var ageCredit = ageAmount * TAX_CREDITS_2024.FEDERAL_LOWEST_RATE;
+    totalCredits += ageCredit;
+  }
+
+  // Pension Income Credit (federal) - up to $2,000 of eligible pension income
+  if (eligiblePensionIncome > 0) {
+    var pensionCreditAmount = Math.min(eligiblePensionIncome, TAX_CREDITS_2024.FEDERAL_PENSION_CREDIT_MAX);
+    var pensionCredit = pensionCreditAmount * TAX_CREDITS_2024.FEDERAL_LOWEST_RATE;
+    totalCredits += pensionCredit;
+  }
+
+  var taxAfterCredits = Math.max(0, baseTax - totalCredits);
+
+  return Math.round(taxAfterCredits * 100) / 100;
+}
+
+
+/**
+ * ----------------------------------------------------------------------
+ * SECTION 28 – Retirement Income Summary
+ * ----------------------------------------------------------------------
+ *
+ * Provides a comprehensive income breakdown at a specific age.
+ */
+
+/**
+ * RETIREMENT_INCOME_SUMMARY
+ *
+ * Provides a comprehensive income breakdown at a specific age showing:
+ * - CPP (estimated or from OTHER_INCOME)
+ * - OAS (estimated or from OTHER_INCOME)
+ * - RRIF minimum withdrawals
+ * - Other income sources
+ * - Total gross and after-tax income
+ *
+ * @param {number} age             Age to calculate income for
+ * @param {number} rrspBalance     RRSP/RRIF balance
+ * @param {number} tfsaBalance     TFSA balance
+ * @param {string} province        Province for tax calculation
+ * @return {Array[]} Detailed income breakdown
+ *
+ * Example:
+ * =RETIREMENT_INCOME_SUMMARY(70, 500000, 100000, "ON")
+ */
+function RETIREMENT_INCOME_SUMMARY(age, rrspBalance, tfsaBalance, province) {
+  age          = Number(age);
+  rrspBalance  = Number(rrspBalance) || 0;
+  tfsaBalance  = Number(tfsaBalance) || 0;
+  province     = (province || "ON").toString().trim().toUpperCase();
+
+  // Input validation
+  if (age < 0 || age > 120) {
+    return [["ERROR: age must be between 0 and 120"]];
+  }
+  if (!PROVINCIAL_TAX_2024[province]) {
+    return [["ERROR: Province not supported"]];
+  }
+
+  // Ensure OTHER_INCOME sheet exists
+  ensureOtherIncomeSheet_();
+
+  // Get other income from the sheet
+  var otherIncome = getOtherIncomeForAge_(age);
+  var taxableOtherIncome = otherIncome.taxable;
+  var nonTaxableOtherIncome = otherIncome.nonTaxable;
+
+  // Calculate RRIF minimum withdrawal if age >= 71
+  var rrifWithdrawal = 0;
+  if (age >= 71 && rrspBalance > 0) {
+    rrifWithdrawal = RRIF_MIN_WITHDRAWAL(age, rrspBalance);
+    if (typeof rrifWithdrawal === 'string') {
+      rrifWithdrawal = 0;
+    }
+  }
+
+  // Total taxable income
+  var totalTaxableIncome = taxableOtherIncome + rrifWithdrawal;
+
+  // Calculate tax with senior credits
+  var estimatedTax = 0;
+  if (totalTaxableIncome > 0) {
+    estimatedTax = ESTIMATE_TAX_WITH_CREDITS(totalTaxableIncome, province, age, rrifWithdrawal);
+    if (typeof estimatedTax === 'string') {
+      estimatedTax = ESTIMATE_TAX(totalTaxableIncome, province);
+      if (typeof estimatedTax === 'string') {
+        estimatedTax = 0;
+      }
+    }
+  }
+
+  // Calculate after-tax income
+  var afterTaxIncome = totalTaxableIncome - estimatedTax + nonTaxableOtherIncome;
+
+  // Build results table
+  var results = [["Income Source", "Annual Amount", "Tax Status"]];
+
+  results.push(["TAXABLE INCOME:", "", ""]);
+  results.push(["Other Income (from OTHER_INCOME sheet)", Math.round(taxableOtherIncome), "Taxable"]);
+
+  if (rrifWithdrawal > 0) {
+    results.push(["RRIF Minimum Withdrawal", Math.round(rrifWithdrawal), "Taxable"]);
+  }
+
+  results.push(["─────────────────", "─────────", "─────────"]);
+  results.push(["Total Taxable Income", Math.round(totalTaxableIncome), ""]);
+
+  results.push(["", "", ""]);
+  results.push(["NON-TAXABLE INCOME:", "", ""]);
+  results.push(["Non-Taxable Income (from OTHER_INCOME)", Math.round(nonTaxableOtherIncome), "Tax-Free"]);
+  results.push(["TFSA Available", Math.round(tfsaBalance), "(Not income)"]);
+
+  results.push(["", "", ""]);
+  results.push(["TAX CALCULATION:", "", ""]);
+  results.push(["Estimated Income Tax", Math.round(estimatedTax), ""]);
+  results.push(["Age for Credits", age, age >= 65 ? "(Age credit eligible)" : ""]);
+
+  results.push(["", "", ""]);
+  results.push(["SUMMARY:", "", ""]);
+  results.push(["Gross Income", Math.round(totalTaxableIncome + nonTaxableOtherIncome), ""]);
+  results.push(["Less: Income Tax", "(" + Math.round(estimatedTax) + ")", ""]);
+  results.push(["Net After-Tax Income", Math.round(afterTaxIncome), ""]);
+  results.push(["Monthly After-Tax", Math.round(afterTaxIncome / 12), ""]);
+
+  return results;
+}
+
+
+/**
+ * ----------------------------------------------------------------------
+ * SECTION 29 – CPP Start Age Comparison Table
+ * ----------------------------------------------------------------------
+ *
+ * Creates a comparison table showing CPP benefits at different start ages.
+ */
+
+/**
+ * CPP_START_AGE_COMPARISON
+ *
+ * Creates a comparison table showing CPP benefits at different start ages (60-70).
+ * Helps visualize the tradeoff between early vs. delayed benefits.
+ *
+ * @param {number} averageEarnings      Average annual pensionable earnings
+ * @param {number} contributionYears    Total years with CPP contributions
+ * @return {Array[]} Table comparing benefits at each age from 60-70
+ *
+ * Example:
+ * =CPP_START_AGE_COMPARISON(65000, 35)
+ */
+function CPP_START_AGE_COMPARISON(averageEarnings, contributionYears) {
+  averageEarnings   = Number(averageEarnings);
+  contributionYears = Number(contributionYears);
+
+  // Input validation
+  if (averageEarnings < 0) {
+    return [["ERROR: averageEarnings must be >= 0"]];
+  }
+  if (contributionYears < 0) {
+    return [["ERROR: contributionYears must be >= 0"]];
+  }
+
+  var results = [["Start Age", "Monthly Benefit", "Annual Benefit", "Adjustment", "Cumulative at 80", "Cumulative at 85", "Cumulative at 90"]];
+
+  for (var age = 60; age <= 70; age++) {
+    var monthlyBenefit = CPP_BENEFIT(averageEarnings, contributionYears, age);
+    if (typeof monthlyBenefit === 'string') {
+      results.push([age, monthlyBenefit, "", "", "", "", ""]);
+      continue;
+    }
+
+    var annualBenefit = monthlyBenefit * 12;
+
+    // Calculate adjustment from age 65
+    var monthsFromNormal = (age - 65) * 12;
+    var adjustment;
+    if (monthsFromNormal < 0) {
+      adjustment = Math.round(monthsFromNormal * CPP_2024.EARLY_REDUCTION_PER_MONTH * 100 * 10) / 10 + "%";
+    } else if (monthsFromNormal > 0) {
+      adjustment = "+" + Math.round(monthsFromNormal * CPP_2024.LATE_INCREASE_PER_MONTH * 100 * 10) / 10 + "%";
+    } else {
+      adjustment = "0% (base)";
+    }
+
+    // Calculate cumulative payments at different ages
+    var yearsCollecting80 = Math.max(0, 80 - age);
+    var yearsCollecting85 = Math.max(0, 85 - age);
+    var yearsCollecting90 = Math.max(0, 90 - age);
+
+    var cumulative80 = annualBenefit * yearsCollecting80;
+    var cumulative85 = annualBenefit * yearsCollecting85;
+    var cumulative90 = annualBenefit * yearsCollecting90;
+
+    results.push([
+      age,
+      "$" + Math.round(monthlyBenefit),
+      "$" + Math.round(annualBenefit).toLocaleString(),
+      adjustment,
+      "$" + Math.round(cumulative80).toLocaleString(),
+      "$" + Math.round(cumulative85).toLocaleString(),
+      "$" + Math.round(cumulative90).toLocaleString()
+    ]);
+  }
+
+  // Add insights
+  results.push(["", "", "", "", "", "", ""]);
+  results.push(["Insights:", "", "", "", "", "", ""]);
+  results.push(["• Early reduction:", "0.6% per month before 65 (max 36% at 60)", "", "", "", "", ""]);
+  results.push(["• Late bonus:", "0.7% per month after 65 (max 42% at 70)", "", "", "", "", ""]);
+  results.push(["• Break-even:", "Compare cumulative columns to find optimal start age", "", "", "", "", ""]);
+
+  return results;
 }

@@ -2,7 +2,7 @@
 
 # Calculation Accuracy Reference
 
-This page clearly identifies which calculations use **exact CRA rules** versus **approximations**. Understanding this helps you know when to cross-reference with official sources.
+This section clearly identifies which calculations use **exact CRA rules** versus **approximations**. Understanding this helps you know when to cross-reference with official sources.
 
 ---
 
@@ -70,3 +70,12 @@ These use **exact formulas** but results depend on your input estimates:
 4. **GIS**: Eligibility requires OAS receipt. For accurate amounts, see [Service Canada GIS tables](https://www.canada.ca/en/services/benefits/publicpensions/cpp/old-age-security/guaranteed-income-supplement.html).
 
 5. **All Projections**: Future projections (10+ years) have increasing uncertainty. Consider running scenarios with different assumptions.
+
+---
+
+## Accuracy Legend
+
+- **Exact** = Uses official CRA rates, formulas, or fixed amounts
+- **Exact math** = Mathematical formula is precise; accuracy depends on input estimates
+- **Approximation** = Simplified model; may differ from actual amounts
+- **Uses CRA rates** = Uses some official values but simplified calculation

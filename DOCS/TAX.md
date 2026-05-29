@@ -2,7 +2,7 @@
 
 # Tax Estimation
 
-This page documents the tax estimation functions.
+Functions for calculating federal and provincial income taxes.
 
 ---
 
@@ -14,20 +14,29 @@ Calculates combined federal + provincial income tax.
 =ESTIMATE_TAX(taxableIncome, province)
 ```
 
-### Supported Provinces
+**Parameters:**
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| taxableIncome | number | Annual taxable income |
+| province | string | Two-letter province code |
 
+**Supported Provinces:**
 - ON (Ontario), BC (British Columbia), AB (Alberta)
 - QC (Quebec), SK (Saskatchewan), MB (Manitoba)
 - NS (Nova Scotia), NB (New Brunswick), PE (PEI)
 - NL (Newfoundland), YT (Yukon), NT (NWT), NU (Nunavut)
 
-### Examples
-
+**Examples:**
 ```
 =ESTIMATE_TAX(80000, "ON")   → ~$17,500
 =ESTIMATE_TAX(80000, "AB")   → ~$16,300 (lower provincial rates)
 =ESTIMATE_TAX(80000, "QC")   → ~$19,200 (higher provincial rates)
 ```
+
+**Note:** These calculations use 2024 tax brackets and basic personal amounts. Actual taxes may differ based on:
+- Tax credits (age, pension, disability, etc.)
+- Deductions (medical, charitable, etc.)
+- Provincial-specific credits
 
 ---
 
@@ -39,11 +48,17 @@ Returns complete tax breakdown.
 =ESTIMATE_TAX_DETAILED(taxableIncome, province)
 ```
 
-### Returns
+**Parameters:**
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| taxableIncome | number | Annual taxable income |
+| province | string | Two-letter province code |
 
-Table showing:
-- Federal Tax (Gross/Net)
-- Provincial Tax (Gross/Net)
+**Returns:** Table showing:
+- Federal Tax (Gross)
+- Federal Tax (Net after credits)
+- Provincial Tax (Gross)
+- Provincial Tax (Net after credits)
 - Basic Credits Applied
 - Effective Rate
 - Marginal Rate
@@ -58,8 +73,21 @@ Returns combined marginal tax rate.
 =MARGINAL_TAX_RATE(taxableIncome, province)
 ```
 
-### Example
+**Parameters:**
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| taxableIncome | number | Annual taxable income |
+| province | string | Two-letter province code |
 
+**Returns:** Combined federal + provincial marginal rate as decimal (e.g., 0.3148)
+
+**Example:**
 ```
 =MARGINAL_TAX_RATE(80000, "ON")  → 0.3148 (31.48%)
 ```
+
+**Use Cases:**
+- Calculating tax on additional income
+- RRSP contribution benefit analysis
+- Pension income splitting calculations
+- Capital gains tax estimation

@@ -2,7 +2,7 @@
 
 # CPP Calculator
 
-This page documents the Canada Pension Plan (CPP) calculation functions.
+Functions for calculating Canada Pension Plan benefits.
 
 ---
 
@@ -14,8 +14,7 @@ Calculates estimated monthly CPP retirement benefit.
 =CPP_BENEFIT(averageEarnings, contributionYears, startAge, [currentYear])
 ```
 
-### Parameters
-
+**Parameters:**
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | averageEarnings | number | Average annual pensionable earnings |
@@ -23,19 +22,15 @@ Calculates estimated monthly CPP retirement benefit.
 | startAge | number | Age to start CPP (60-70) |
 | currentYear | number | Optional: Year for YMPE reference (default 2024) |
 
-### Returns
+**Returns:** Estimated monthly CPP benefit
 
-Estimated monthly CPP benefit
-
-### Key Rules Applied
-
+**Key Rules Applied:**
 - Early start (60-64): Reduced by 0.6% per month (7.2% per year)
 - Normal age: 65
 - Late start (66-70): Increased by 0.7% per month (8.4% per year)
 - Maximum 39 years of contributions counted
 
-### Examples
-
+**Examples:**
 ```
 =CPP_BENEFIT(60000, 35, 65)     → ~$953/month (at 65 with 35 years)
 =CPP_BENEFIT(60000, 35, 60)     → ~$610/month (early at 60, 36% reduction)
@@ -52,9 +47,7 @@ Returns a detailed breakdown of CPP benefit calculation.
 =CPP_BENEFIT_DETAILED(averageEarnings, contributionYears, startAge)
 ```
 
-### Returns
-
-Table showing:
+**Returns:** Table showing:
 - Monthly Benefit
 - Annual Benefit  
 - Start Age
@@ -73,14 +66,20 @@ Calculates CPP survivor pension for a surviving spouse.
 =CPP_SURVIVOR_BENEFIT(deceasedCPP, survivorAge, survivorReceivesCPP, survivorCPP)
 ```
 
-### Key Rules
+**Parameters:**
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| deceasedCPP | number | Deceased's monthly CPP amount |
+| survivorAge | number | Age of the surviving spouse |
+| survivorReceivesCPP | boolean | Is survivor already receiving their own CPP? |
+| survivorCPP | number | Survivor's own CPP amount (if receiving) |
 
+**Key Rules:**
 - Under 65: Flat rate (~$218) + 37.5% of deceased's pension
 - 65 and over: 60% of deceased's pension
 - Combined with own CPP cannot exceed maximum
 
-### Examples
-
+**Examples:**
 ```
 =CPP_SURVIVOR_BENEFIT(1000, 55, FALSE, 0)  → ~$593/month
 =CPP_SURVIVOR_BENEFIT(1000, 68, TRUE, 800) → ~$564/month (capped)
@@ -94,5 +93,8 @@ Returns the CPP lump-sum death benefit.
 
 ```
 =CPP_DEATH_BENEFIT()
-→ $2,500 (fixed amount)
 ```
+
+**Returns:** $2,500 (fixed amount)
+
+This is a one-time payment made to the estate or eligible survivor of a deceased CPP contributor.

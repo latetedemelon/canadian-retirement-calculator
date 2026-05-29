@@ -23,6 +23,44 @@ This documentation provides detailed information about all functions available i
 | [Examples & Use Cases](EXAMPLES.md) | Practical examples and common scenarios |
 | [Troubleshooting](TROUBLESHOOTING.md) | Common errors and solutions |
 | [Calculation Accuracy](ACCURACY.md) | Which calculations are exact vs. approximations |
+[← Back to README](../README.md)
+
+# Function Documentation
+
+This documentation provides detailed information about all functions available in the Canadian Retirement Calculator for Google Sheets.
+
+## Documentation Pages
+
+### Core Functions
+- **[CORE-FUNCTIONS.md](CORE-FUNCTIONS.md)** - Essential retirement projection functions including `RETIREMENT_INCOME`, `LIFE_EXPECTANCY_AGE`, `PENSION_INCOME_PROJECTED`, and `RETIREMENT_TARGET_SPEND_TABLE`
+
+### Government Benefits
+- **[CPP.md](CPP.md)** - Canada Pension Plan functions: `CPP_BENEFIT`, `CPP_BENEFIT_DETAILED`, `CPP_SURVIVOR_BENEFIT`, `CPP_DEATH_BENEFIT`
+- **[OAS.md](OAS.md)** - Old Age Security functions: `OAS_BENEFIT`, `OAS_CLAWBACK`, `OAS_BENEFIT_DETAILED`
+- **[GIS.md](GIS.md)** - Guaranteed Income Supplement: `GIS_BENEFIT`
+
+### RRIF & Withdrawals
+- **[RRIF.md](RRIF.md)** - RRIF mandatory minimum functions: `RRIF_MIN_WITHDRAWAL`, `RRIF_MIN_PERCENTAGE`, `RRIF_SCHEDULE`
+- **[WITHDRAWAL-STRATEGIES.md](WITHDRAWAL-STRATEGIES.md)** - Tax-efficient withdrawal ordering: `OPTIMAL_WITHDRAWAL_ORDER`
+
+### Tax Calculations
+- **[TAX.md](TAX.md)** - Tax estimation functions: `ESTIMATE_TAX`, `ESTIMATE_TAX_DETAILED`, `MARGINAL_TAX_RATE`
+- **[NON-REGISTERED.md](NON-REGISTERED.md)** - Non-registered account functions: `TAXABLE_ACCOUNT_GROWTH`, `CAPITAL_GAINS_TAX`
+
+### Contribution Room
+- **[CONTRIBUTION-ROOM.md](CONTRIBUTION-ROOM.md)** - Contribution room tracking: `RRSP_CONTRIBUTION_ROOM`, `TFSA_CONTRIBUTION_ROOM`
+
+### Planning Tools
+- **[RETIREMENT-READINESS.md](RETIREMENT-READINESS.md)** - Readiness assessment: `RETIREMENT_SAVINGS_TARGET`, `RETIREMENT_READINESS_SCORE`, `REQUIRED_SAVINGS_RATE`
+- **[VALIDATION.md](VALIDATION.md)** - Input validation: `VALIDATE_RETIREMENT_INPUTS`
+- **[PENSION-SPLITTING.md](PENSION-SPLITTING.md)** - Pension income splitting: `PENSION_INCOME_SPLIT`
+- **[ESTATE-PLANNING.md](ESTATE-PLANNING.md)** - Estate tax planning: `ESTATE_TAX_RRSP`
+- **[NET-WORTH.md](NET-WORTH.md)** - Net worth and inflation tools: `NET_WORTH_SUMMARY`, `FUTURE_VALUE_INFLATION`, `PRESENT_VALUE_INFLATION`
+
+### Reference
+- **[EXAMPLES.md](EXAMPLES.md)** - Examples and use cases
+- **[TROUBLESHOOTING.md](TROUBLESHOOTING.md)** - Common errors and solutions
+- **[ACCURACY.md](ACCURACY.md)** - Calculation accuracy reference (exact vs approximations)
 
 ---
 
