@@ -44,6 +44,7 @@ This project provides a Google Apps Script file (`code.gs`) that plugs into a Go
 26. [Enhanced Tax Calculator for Seniors](#26-enhanced-tax-calculator-for-seniors)
 27. [Retirement Income Summary](#27-retirement-income-summary)
 28. [Function Quick Reference](#28-function-quick-reference)
+29. [Single-Scenario Retirement Workbook Flow](#29-single-scenario-retirement-workbook-flow)
 
 ---
 
@@ -564,6 +565,235 @@ Comprehensive income breakdown at a specific age.
 - **Exact math** = Mathematical formula is precise; accuracy depends on input estimates
 - **Approximation** = Simplified model; may differ from actual amounts
 - **Uses CRA rates** = Uses some official values but simplified calculation
+
+---
+
+## 29. Single-Scenario Retirement Workbook Flow
+
+The calculator now includes a **script-driven projection flow** that builds a complete year-by-year retirement plan with CPP/OAS estimation.
+
+### Overview
+
+This feature performs most calculations in Apps Script (rather than formulas) and writes results to a structured **Calcs** sheet for use in summary displays. It's designed for a single-scenario workbook.
+
+### Required Sheet Structure
+
+You need **four sheets** in your workbook:
+
+1. **Inputs** - Contains all input parameters via named ranges
+2. **CPP_Contribs** - Contains your historical CPP contribution data
+3. **Calcs** - Receives projection parameters and year-by-year projection table
+4. **Summary** - Uses data from Calcs for summary displays
+
+### Named Ranges Setup
+
+#### On the Inputs Sheet
+
+Create these named ranges pointing to cells on your Inputs sheet:
+
+| Named Range | Cell | Description |
+|-------------|------|-------------|
+| `retirement_age` | Inputs!B2 | Age you plan to retire |
+| `current_age` | Inputs!B3 | Your current age |
+| `current_year` | Inputs!B4 | Current calendar year |
+| `cpp_start_age` | Inputs!B5 | Age to start CPP (60-70) |
+| `oas_start_age` | Inputs!B6 | Age to start OAS (65-70) |
+| `province` | Inputs!B7 | Province code (ON, BC, AB, etc.) |
+| `marital_status` | Inputs!B8 | Marital status |
+| `current_income` | Inputs!B10 | Current annual income |
+| `annual_contrib` | Inputs!B11 | Annual retirement savings contribution |
+| `rrsp_balance_now` | Inputs!B12 | Current RRSP balance |
+| `tfsa_balance_now` | Inputs!B13 | Current TFSA balance |
+| `taxable_balance_now` | Inputs!B14 | Current taxable account balance |
+| `real_return` | Inputs!B15 | Expected real return (as %, e.g., 4 for 4%) |
+| `inflation_rate` | Inputs!B16 | Expected inflation rate (as %, e.g., 2 for 2%) |
+| `target_net_income_today` | Inputs!B17 | Target annual net income in retirement (today's $) |
+| `life_expectancy_age` | Inputs!B19 | Age to plan until |
+
+**To create a named range in Google Sheets:**
+1. Select the cell (e.g., B2)
+2. Go to **Data → Named ranges**
+3. Enter the name (e.g., `retirement_age`)
+4. Click **Done**
+
+#### On the CPP_Contribs Sheet
+
+Create this named range:
+
+| Named Range | Cell | Description |
+|-------------|------|-------------|
+| `cpp_contribs_range` | CPP_Contribs!A2:F500 | Your CPP contribution history |
+
+**CPP_Contribs Sheet Structure:**
+
+The CPP_Contribs sheet should have these columns (row 1 = headers, data starts at row 2):
+
+| Column | Header | Description |
+|--------|--------|-------------|
+| A | Year | Calendar year of contribution |
+| B | Age | Your age that year |
+| C | Pensionable Earnings | Your earnings subject to CPP |
+| D | YMPE | Year's Maximum Pensionable Earnings for that year |
+| E | Earnings/YMPE | Ratio (auto-calculate: =C2/D2) |
+| F | Notes | Optional notes |
+
+**How to populate CPP_Contribs:**
+- You can get your actual CPP contribution history from [My Service Canada Account](https://www.canada.ca/en/employment-social-development/services/my-account.html)
+- Or estimate based on your employment history
+- Leave rows blank if you didn't contribute in certain years
+
+#### On the Calcs Sheet
+
+Create these named ranges for summary outputs:
+
+| Named Range | Cell | Description |
+|-------------|------|-------------|
+| `projection_start_year` | Calcs!B5 | First year of projection |
+| `projection_end_year` | Calcs!B6 | Last year of projection |
+| `real_return_decimal` | Calcs!B7 | Real return as decimal |
+| `inflation_decimal` | Calcs!B8 | Inflation as decimal |
+| `cpp_annual_today` | Calcs!B27 | Estimated CPP annual benefit (today's $) |
+| `cpp_annual_nominal` | Calcs!B28 | CPP annual benefit (nominal, in start year) |
+| `oas_annual_today` | Calcs!B29 | Estimated OAS annual benefit (today's $) |
+| `oas_annual_nominal` | Calcs!B30 | OAS annual benefit (nominal, in start year) |
+
+You can add labels in column A (e.g., A5 = "Projection Start Year") and the named ranges point to the values in column B.
+
+### Running the Projection
+
+1. **Ensure all sheets and named ranges are set up** as described above
+2. In Google Sheets, go to the **Retirement** menu
+3. Click **Run Projection**
+4. The script will:
+   - Read your inputs from named ranges
+   - Read your CPP contribution history
+   - Calculate CPP and OAS benefit estimates
+   - Write summary values to the Calcs sheet
+   - Build a year-by-year projection table in Calcs (starting at row 50)
+
+### Projection Table Output
+
+The projection table appears in the **Calcs** sheet starting at **row 50** (headers) and **row 51** (data).
+
+**Columns:**
+1. **Year** - Calendar year
+2. **Age** - Your age
+3. **Employment Income** - Income from work (before retirement)
+4. **CPP Income** - CPP benefits (starts at cpp_start_age)
+5. **OAS Income** - OAS benefits (starts at oas_start_age)
+6. **DB Pension** - Defined benefit pension (placeholder for future)
+7. **Other Income** - Other income sources (placeholder for future)
+8. **Gross Income** - Total income before tax
+9. **Taxes** - Estimated income tax
+10. **Net Income** - Income after tax
+11. **Start Balance** - Portfolio value at start of year
+12. **Contributions** - Annual contributions (pre-retirement)
+13. **Withdrawals** - Portfolio withdrawals (post-retirement)
+14. **Investment Return** - Portfolio growth
+15. **End Balance** - Portfolio value at end of year
+16. **Net Income (today's $)** - Net income discounted to current year
+
+### CPP and OAS Estimation
+
+The projection uses **simplified estimation models**:
+
+**CPP Estimation:**
+- Calculates average Earnings/YMPE ratio from your contribution history
+- Scales MAX_CPP_65_TODAY constant by this ratio
+- Applies early/late adjustment (7.2% per year reduction if early, 8.4% per year increase if late)
+- Current default: MAX_CPP_65_TODAY = $16,375/year
+
+**OAS Estimation:**
+- Assumes full OAS eligibility (40+ years residence)
+- Applies deferral bonus (7.2% per year if deferred past 65)
+- Current default: FULL_OAS_ANNUAL_TODAY = $8,560/year
+
+**To adjust these constants:**
+1. Open the Apps Script editor (**Extensions → Apps Script**)
+2. Find the `PROJECTION_CONSTANTS` object (search for "PROJECTION_CONSTANTS")
+3. Update the values:
+   ```javascript
+   var PROJECTION_CONSTANTS = {
+     MAX_CPP_65_TODAY: 16375,        // Adjust this
+     FULL_OAS_ANNUAL_TODAY: 8560,    // Adjust this
+     // ... other constants
+   };
+   ```
+4. Save the script
+
+### Tax Estimation
+
+The projection uses a **simplified progressive tax model** with hard-coded brackets (in today's dollars):
+
+- $0 - $15,000: 0% (basic personal amount)
+- $15,000 - $50,000: 20%
+- $50,000 - $100,000: 30%
+- $100,000 - $155,000: 40%
+- $155,000 - $220,000: 45%
+- $220,000+: 50%
+
+These are approximate combined federal+provincial rates.
+
+**Limitations:**
+- Does not use actual province-specific brackets
+- Does not account for tax credits (age amount, pension splitting, etc.)
+- Brackets are inflated each year but are rough estimates
+
+**To improve tax accuracy:**
+- In the Apps Script editor, find `SIMPLE_TAX_BRACKETS_TODAY`
+- Adjust the brackets and rates to better match your situation
+- Or modify `computeTax_()` to call `ESTIMATE_TAX()` for province-specific calculation
+
+### Withdrawal Strategy
+
+For retirement years (age >= retirement_age):
+
+1. Calculate income from CPP, OAS, and employment (if any)
+2. Compute tax on that income
+3. Determine the gap between target net income and actual net income
+4. Calculate portfolio withdrawal needed to fill the gap
+5. Re-compute tax with withdrawal included
+6. Update portfolio balance
+
+This aims to provide consistent purchasing power (target_net_income_today) throughout retirement.
+
+### Limitations and Future Enhancements
+
+**Current Limitations:**
+- CPP/OAS estimates are simplified (real Service Canada amounts may vary)
+- Tax calculation is approximate (not province-specific, no credits)
+- Assumes one person (no spouse modeling)
+- No RRIF minimum withdrawal enforcement
+- No OAS clawback calculation
+- DB Pension and Other Income columns are placeholders
+
+**Future Enhancements:**
+- Integration with existing `ESTIMATE_TAX()` for province-specific taxes
+- RRIF minimum withdrawals (age 71+)
+- OAS clawback based on income
+- Spouse/family modeling
+- Monte Carlo simulation for multiple scenarios
+- Integration with OTHER_INCOME sheet
+
+### Troubleshooting
+
+**Error: "Named range '...' not found"**
+- Ensure you've created all required named ranges
+- Check spelling and case sensitivity
+- Verify the named ranges point to the correct cells
+
+**Error: "Calcs sheet not found"**
+- Create a sheet named "Calcs" (case-sensitive)
+
+**CPP/OAS amounts seem wrong:**
+- Check your CPP contribution history in CPP_Contribs
+- Verify cpp_start_age and oas_start_age in Inputs
+- Adjust PROJECTION_CONSTANTS if needed
+
+**Projection table is empty:**
+- Check that current_age < retirement_age < life_expectancy_age
+- Verify all named ranges have valid numeric values
+- Look for error messages in the toast notification
 
 ---
 
