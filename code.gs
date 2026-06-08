@@ -741,6 +741,9 @@ function onOpen() {
     .addSeparator()
     .addItem('Run Projection', 'runProjection')
     .addItem('Run Couple Projection', 'runCoupleProjection')
+    .addSeparator()
+    .addItem('Setup Goals sheet', 'setupGoalsSheet')
+    .addItem('Run Lifestyle Goals', 'runLifestyleGoals')
     .addToUi();
 }
 
@@ -5271,4 +5274,335 @@ function TRIP_PLAN(tripCost, costIsTodaysDollars, tripIntervalYears, planningYea
   }
 
   return table;
+}
+
+
+/**
+ * ----------------------------------------------------------------------
+ * SECTION 36 – Generic big-purchase planners
+ * ----------------------------------------------------------------------
+ *
+ * Reusable building blocks for any large expense the dedicated planners don't
+ * name explicitly: home down payments, renovations, weddings, boats/RVs, major
+ * home systems (roof, HVAC, appliances), and so on. The numeric helpers (suffix
+ * "_") are shared by both the custom functions below and the GOALS sheet engine.
+ */
+
+/**
+ * bigPurchaseAnnual_
+ * Level annuity-due payment to reach a one-time future goal.
+ * @private
+ */
+function bigPurchaseAnnual_(cost, inflate, years, saved, annualReturn, inflationRate) {
+  var future = inflate ? cost * Math.pow(1 + inflationRate, years) : cost;
+  var fvSaved = saved * Math.pow(1 + annualReturn, years);
+  var gap = Math.max(0, future - fvSaved);
+  return years <= 0 ? gap : pmtAnnuityDue_(annualReturn, years, gap);
+}
+
+/**
+ * recurringAnnual_
+ * Level contribution that funds a recurring expense (every intervalYears) over a
+ * horizon, first occurring firstYearsAway from now.
+ * @private
+ */
+function recurringAnnual_(cost, inflate, intervalYears, horizon, firstYearsAway, saved, annualReturn, inflationRate) {
+  intervalYears = intervalYears > 0 ? intervalYears : 1;
+  var numYears = horizon + 1;
+  var outflows = [];
+  for (var t = 0; t < numYears; t++) outflows[t] = 0;
+  for (var y = Math.max(0, firstYearsAway); y <= horizon; y += intervalYears) {
+    outflows[y] = inflate ? cost * Math.pow(1 + inflationRate, y) : cost;
+  }
+  return levelContribForOutflows_(outflows, saved, annualReturn, numYears);
+}
+
+/**
+ * carLifetimeAnnual_
+ * Level contribution that funds every vehicle replacement over a horizon.
+ * @private
+ */
+function carLifetimeAnnual_(currentVehicleAge, intervalYears, cost, inflate, saved, annualReturn, inflationRate, horizon, tradeIn) {
+  intervalYears = intervalYears > 0 ? intervalYears : 1;
+  var numYears = horizon + 1;
+  var outflows = [];
+  for (var t = 0; t < numYears; t++) outflows[t] = 0;
+  var yearsToNext = Math.max(0, intervalYears - currentVehicleAge);
+  for (var y = yearsToNext; y <= horizon; y += intervalYears) {
+    var g = inflate ? cost * Math.pow(1 + inflationRate, y) : cost;
+    var ti = inflate ? tradeIn * Math.pow(1 + inflationRate, y) : tradeIn;
+    outflows[y] = Math.max(0, g - ti);
+  }
+  return levelContribForOutflows_(outflows, saved, annualReturn, numYears);
+}
+
+/**
+ * BIG_PURCHASE_FUND
+ *
+ * Generic one-time big-purchase planner — down payment, renovation, wedding,
+ * boat/RV, etc. Returns the level annual and monthly savings required.
+ *
+ * @param {number} targetCost           Cost of the purchase
+ * @param {boolean} costIsTodaysDollars TRUE if targetCost is in today's $
+ * @param {number} yearsUntil           Years until the purchase
+ * @param {number} currentSavings       Money already set aside
+ * @param {number} annualReturn         Expected annual return (decimal)
+ * @param {number} inflationRate        Inflation rate (decimal)
+ *
+ * @return {Array[]} Two-column summary table
+ * @customfunction
+ *
+ * Example (home down payment):
+ * =BIG_PURCHASE_FUND(80000, TRUE, 5, 20000, 0.04, 0.025)
+ */
+function BIG_PURCHASE_FUND(targetCost, costIsTodaysDollars, yearsUntil, currentSavings, annualReturn, inflationRate) {
+  targetCost     = Number(targetCost);
+  yearsUntil     = Number(yearsUntil);
+  currentSavings = Number(currentSavings) || 0;
+  annualReturn   = Number(annualReturn);
+  inflationRate  = Number(inflationRate) || 0;
+
+  var inflate = asBool_(costIsTodaysDollars);
+  var future = inflate ? targetCost * Math.pow(1 + inflationRate, yearsUntil) : targetCost;
+  var fvSaved = currentSavings * Math.pow(1 + annualReturn, yearsUntil);
+  var gap = Math.max(0, future - fvSaved);
+  var annual = bigPurchaseAnnual_(targetCost, inflate, yearsUntil, currentSavings, annualReturn, inflationRate);
+
+  return [
+    ['Big Purchase Plan', ''],
+    ['Years until purchase', yearsUntil],
+    ['Projected cost (future $)', Math.round(future)],
+    ['Future value of current savings', Math.round(fvSaved)],
+    ['Funding gap', Math.round(gap)],
+    ['Required annual contribution', Math.round(annual)],
+    ['≈ Required monthly contribution', Math.round(annual / 12)]
+  ];
+}
+
+/**
+ * RECURRING_EXPENSE_FUND
+ *
+ * Generic recurring big-expense planner — major home systems (roof, HVAC,
+ * appliances), recurring travel, etc. One level contribution funds every
+ * occurrence over the horizon; the fund never goes negative.
+ *
+ * @param {number} expenseCost          Cost of one occurrence
+ * @param {boolean} costIsTodaysDollars TRUE to inflate each occurrence
+ * @param {number} intervalYears        Years between occurrences (1 = every year)
+ * @param {number} planningYears        Horizon to plan over (years)
+ * @param {number} firstYearsAway       Years until the first occurrence
+ * @param {number} currentSavings       Money already set aside
+ * @param {number} annualReturn         Expected annual return (decimal)
+ * @param {number} inflationRate        Inflation rate (decimal)
+ *
+ * @return {Array[]} Two-column summary table
+ * @customfunction
+ *
+ * Example (replace a $15,000 roof every 25 years over 40 years):
+ * =RECURRING_EXPENSE_FUND(15000, TRUE, 25, 40, 20, 0, 0.04, 0.025)
+ */
+function RECURRING_EXPENSE_FUND(expenseCost, costIsTodaysDollars, intervalYears, planningYears, firstYearsAway, currentSavings, annualReturn, inflationRate) {
+  expenseCost    = Number(expenseCost);
+  intervalYears  = Number(intervalYears) || 1;
+  planningYears  = Number(planningYears);
+  firstYearsAway = Number(firstYearsAway) || 0;
+  currentSavings = Number(currentSavings) || 0;
+  annualReturn   = Number(annualReturn);
+  inflationRate  = Number(inflationRate) || 0;
+
+  if (planningYears <= 0) {
+    return [["ERROR: planningYears must be greater than 0"]];
+  }
+
+  var inflate = asBool_(costIsTodaysDollars);
+  var annual = recurringAnnual_(expenseCost, inflate, intervalYears, planningYears, firstYearsAway, currentSavings, annualReturn, inflationRate);
+
+  return [
+    ['Recurring Expense Plan', ''],
+    ['Cost per occurrence', Math.round(expenseCost)],
+    ['Every (years)', intervalYears],
+    ['First occurrence in (years)', firstYearsAway],
+    ['Horizon (years)', planningYears],
+    ['Required annual contribution', Math.round(annual)],
+    ['≈ Required monthly contribution', Math.round(annual / 12)]
+  ];
+}
+
+/**
+ * HOME_MAINTENANCE_RESERVE
+ *
+ * Projects a home-maintenance reserve funded as a percentage of the (inflating)
+ * home value each year — the common "set aside 1–3% of home value per year" rule.
+ * Models the reserve building up; actual repairs draw it down as they occur.
+ *
+ * @param {number} homeValue        Current home value
+ * @param {number} annualReservePct Annual reserve as a fraction of home value (e.g. 0.01–0.03)
+ * @param {number} planningYears    Years to project
+ * @param {number} currentSavings   Opening reserve balance
+ * @param {number} annualReturn     Expected annual return on the reserve (decimal)
+ * @param {number} inflationRate    Home-value / cost inflation (decimal)
+ *
+ * @return {Array[]} Table: Year, Home Value, Reserve Contribution, Reserve Balance
+ * @customfunction
+ *
+ * Example (2% of a $600k home for 20 years):
+ * =HOME_MAINTENANCE_RESERVE(600000, 0.02, 20, 0, 0.04, 0.025)
+ */
+function HOME_MAINTENANCE_RESERVE(homeValue, annualReservePct, planningYears, currentSavings, annualReturn, inflationRate) {
+  homeValue        = Number(homeValue);
+  annualReservePct = Number(annualReservePct);
+  planningYears    = Number(planningYears);
+  currentSavings   = Number(currentSavings) || 0;
+  annualReturn     = Number(annualReturn);
+  inflationRate    = Number(inflationRate) || 0;
+
+  if (planningYears <= 0) {
+    return [["ERROR: planningYears must be greater than 0"]];
+  }
+
+  var startYear = (new Date()).getFullYear();
+  var balance = currentSavings;
+  var table = [['Year', 'Home Value', 'Reserve Contribution', 'Reserve Balance']];
+
+  for (var t = 0; t <= planningYears; t++) {
+    var hv = homeValue * Math.pow(1 + inflationRate, t);
+    var contribution = hv * annualReservePct;
+    balance += contribution;
+    var balAfter = balance;
+    balance = balance * (1 + annualReturn);
+
+    table.push([
+      startYear + t,
+      Math.round(hv),
+      Math.round(contribution),
+      Math.round(balAfter)
+    ]);
+  }
+
+  return table;
+}
+
+
+/**
+ * ----------------------------------------------------------------------
+ * SECTION 37 – GOALS sheet (button-driven backward-funding engine)
+ * ----------------------------------------------------------------------
+ *
+ * Ports the spreadsheet's "Goals" tab into a one-click flow: enter any number of
+ * big-purchase goals as rows, hit "Run Lifestyle Goals", and the required annual
+ * and monthly savings are filled in for each. Handles lump-sum, recurring, and
+ * lifetime-vehicle goals through the engines above.
+ */
+
+/**
+ * ensureGoalsSheet_
+ * Creates the GOALS sheet with headers and example rows if it doesn't exist.
+ * @private
+ */
+function ensureGoalsSheet_() {
+  var ss = SpreadsheetApp.getActive();
+  var sheet = ss.getSheetByName('GOALS');
+  if (sheet) return sheet;
+
+  sheet = ss.insertSheet('GOALS');
+  var headers = [
+    'Goal', 'Type', 'Cost / Target', 'Basis', 'Years Until / Veh. Age',
+    'Interval (yrs)', 'Horizon (yrs)', 'Current Saved', 'Return', 'Trade-in / Resale',
+    'Inflation', 'Required Annual', 'Required Monthly', 'Notes'
+  ];
+  var examples = [
+    ['Home down payment', 'Lump sum', 80000, "Today's $", 5, '', '', 20000, 0.04, '', 0.025, '', '', ''],
+    ['Kitchen renovation', 'Lump sum', 45000, "Today's $", 8, '', '', 0, 0.04, '', 0.025, '', '', ''],
+    ['Wedding', 'Lump sum', 35000, "Today's $", 3, '', '', 5000, 0.03, '', 0.025, '', '', ''],
+    ['Roof replacement', 'Recurring', 15000, "Today's $", 20, 25, 40, 0, 0.04, '', 0.025, '', '', ''],
+    ['HVAC / furnace', 'Recurring', 9000, "Today's $", 12, 15, 40, 0, 0.04, '', 0.025, '', '', ''],
+    ['Major appliances', 'Recurring', 6000, "Today's $", 8, 12, 40, 0, 0.04, '', 0.025, '', '', ''],
+    ['Annual travel', 'Recurring', 8000, "Today's $", 0, 1, 25, 5000, 0.05, '', 0.025, '', '', ''],
+    ['Vehicle (lifetime)', 'Vehicle', 40000, "Today's $", 3, 10, 40, 5000, 0.04, 8000, 0.025, '', '', ''],
+    ['Boat / RV', 'Lump sum', 60000, "Today's $", 10, '', '', 0, 0.04, '', 0.025, '', '', '']
+  ];
+  sheet.getRange(1, 1, 1, headers.length).setValues([headers]).setFontWeight('bold');
+  sheet.getRange(2, 1, examples.length, headers.length).setValues(examples);
+  sheet.setFrozenRows(1);
+  return sheet;
+}
+
+/**
+ * setupGoalsSheet
+ * Menu action: create/verify the GOALS sheet.
+ */
+function setupGoalsSheet() {
+  ensureGoalsSheet_();
+  SpreadsheetApp.getActive().toast('GOALS sheet is ready. Enter your goals, then run "Run Lifestyle Goals".');
+}
+
+/**
+ * runLifestyleGoals
+ *
+ * Menu action: read each goal row from the GOALS sheet, dispatch to the right
+ * engine, and write the required annual/monthly savings plus a note.
+ */
+function runLifestyleGoals() {
+  try {
+    var ss = SpreadsheetApp.getActive();
+    var sheet = ensureGoalsSheet_();
+    var lastRow = sheet.getLastRow();
+    if (lastRow < 2) {
+      ss.toast('Add goals to the GOALS sheet first.');
+      return;
+    }
+
+    var data = sheet.getRange(2, 1, lastRow - 1, 11).getValues();
+    var out = [];
+
+    for (var i = 0; i < data.length; i++) {
+      var row = data[i];
+      var name = row[0];
+      var type = String(row[1] || '').toLowerCase().trim();
+
+      if (!name || !type) {
+        out.push(['', '', '']);
+        continue;
+      }
+
+      var cost      = Number(row[2]) || 0;
+      var inflate   = String(row[3] || '').toLowerCase().indexOf('today') >= 0;
+      var yearsUntil = Number(row[4]) || 0;          // also "current vehicle age" for Vehicle
+      var interval  = Number(row[5]) || 1;
+      var horizon   = Number(row[6]) || 30;
+      var saved     = Number(row[7]) || 0;
+      var ret       = (row[8] === '' || row[8] === null) ? 0.04 : Number(row[8]);
+      var tradeIn   = Number(row[9]) || 0;
+      var infl      = (row[10] === '' || row[10] === null) ? 0.025 : Number(row[10]);
+
+      var annual = 0;
+      var note = '';
+
+      if (type.indexOf('lump') >= 0) {
+        annual = bigPurchaseAnnual_(cost, inflate, yearsUntil, saved, ret, infl);
+        note = 'One-time goal in ' + yearsUntil + ' yr(s)';
+      } else if (type.indexOf('vehicle') >= 0 || type.indexOf('car') >= 0) {
+        annual = carLifetimeAnnual_(yearsUntil, interval, cost, inflate, saved, ret, infl, horizon, tradeIn);
+        note = 'Replace every ' + interval + ' yr over ' + horizon + ' yr (current age ' + yearsUntil + ')';
+      } else {
+        // recurring / trip / home maintenance
+        annual = recurringAnnual_(cost, inflate, interval, horizon, yearsUntil, saved, ret, infl);
+        note = 'Every ' + interval + ' yr over ' + horizon + ' yr (first in ' + yearsUntil + ')';
+      }
+
+      out.push([Math.round(annual), Math.round(annual / 12), note]);
+    }
+
+    sheet.getRange(2, 12, out.length, 3).setValues(out);
+
+    // Total of the level annual contributions.
+    var total = 0;
+    for (var j = 0; j < out.length; j++) total += Number(out[j][0]) || 0;
+    sheet.getRange(lastRow + 2, 11, 1, 3).setValues([['TOTAL / yr →', Math.round(total), Math.round(total / 12)]]);
+
+    ss.toast('Lifestyle goals updated — see the Required Annual / Monthly columns.');
+  } catch (e) {
+    SpreadsheetApp.getUi().alert('Error running lifestyle goals: ' + e.message);
+    throw e;
+  }
 }

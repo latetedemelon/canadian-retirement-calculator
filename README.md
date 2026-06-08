@@ -14,6 +14,7 @@ This project provides a Google Apps Script file (`code.gs`) that plugs into a Go
 - **Couple / household planning** — a two-person projection with per-spouse taxation
 - **RESP / CESG education planner** — year-by-year schedule with grant and lifetime caps
 - **Lifestyle goals** — recurring yearly **trip savings** and full **vehicle planning** (sinking fund, replacement schedule, total cost of ownership)
+- **Big-purchase goals** — a one-click **GOALS sheet** (down payment, renovation, wedding, boat/RV, home systems, lifetime vehicle) that solves the required monthly/annual savings for each
 - **Tax estimation** for all 13 provinces and territories (2024 brackets)
 - And many more retirement planning functions...
 
@@ -55,6 +56,7 @@ This project provides a Google Apps Script file (`code.gs`) that plugs into a Go
 32. [RESP / CESG Education Planner](#32-resp--cesg-education-planner)
 33. [FHSA Contribution Room](#33-fhsa-contribution-room)
 34. [Lifestyle Goals — Trip Savings & Vehicle Planning](#34-lifestyle-goals--trip-savings--vehicle-planning)
+35. [Big-Purchase Goals & the GOALS Sheet](#35-big-purchase-goals--the-goals-sheet)
 
 ---
 
@@ -561,6 +563,9 @@ Comprehensive income breakdown at a specific age.
 | `CAR_REPLACEMENT_SCHEDULE` | When/what each replacement costs | Exact math |
 | `CAR_LIFETIME_FUND` | Fund every replacement over a lifetime | Exact math |
 | `CAR_TOTAL_COST_OF_OWNERSHIP` | Vehicle TCO, annualized | Exact math |
+| `BIG_PURCHASE_FUND` | One-time goal (down payment, reno, wedding…) | Exact math |
+| `RECURRING_EXPENSE_FUND` | Recurring big expense (roof, HVAC, appliances) | Exact math |
+| `HOME_MAINTENANCE_RESERVE` | Reserve as % of home value | Exact math |
 
 #### Non-Registered Accounts
 | Function | Purpose | Accuracy |
@@ -912,6 +917,47 @@ Models the **$8,000/yr** room accrual, the **$8,000 carryforward cap** (max $16,
 ```
 # A new car every 10 years for the next 40 years, net of trade-in:
 =CAR_LIFETIME_FUND(3, 10, 40000, TRUE, 5000, 0.04, 0.025, 40, 8000)
+```
+
+---
+
+## 35. Big-Purchase Goals & the GOALS Sheet
+
+For everything else — **home down payment, renovation, wedding, boat/RV, major home systems (roof, HVAC, appliances)** — there's a one-click backward-funding flow plus generic in-cell functions.
+
+### One-click GOALS sheet
+
+1. **Retirement → Setup Goals sheet** creates a **GOALS** sheet pre-filled with example rows.
+2. Enter your goals (one per row) and **Retirement → Run Lifestyle Goals** fills in the **Required Annual** and **Required Monthly** savings for each, plus a TOTAL row.
+
+| Column | Meaning |
+|--------|---------|
+| Goal | Free-text name |
+| **Type** | `Lump sum`, `Recurring`, or `Vehicle` |
+| Cost / Target | Cost of the purchase / one occurrence |
+| Basis | `Today's $` or `Future $` |
+| Years Until / Veh. Age | Years until the goal (or **current vehicle age** for `Vehicle`) |
+| Interval (yrs) | Years between occurrences (Recurring / Vehicle) |
+| Horizon (yrs) | Planning horizon (Recurring / Vehicle) |
+| Current Saved | Money already earmarked |
+| Return | Expected return (decimal; default 0.04) |
+| Trade-in / Resale | Vehicle trade-in at each replacement |
+| Inflation | Cost inflation (decimal; default 0.025) |
+
+`Lump sum` → one-time goal · `Recurring` → roof/HVAC/appliances/travel on a cadence · `Vehicle` → lifetime replacements net of trade-in.
+
+### Generic functions (use in any cell)
+
+| Function | Purpose |
+|----------|---------|
+| `BIG_PURCHASE_FUND(targetCost, costIsTodaysDollars, yearsUntil, currentSavings, annualReturn, inflationRate)` | One-time goal: required annual & monthly savings |
+| `RECURRING_EXPENSE_FUND(expenseCost, costIsTodaysDollars, intervalYears, planningYears, firstYearsAway, currentSavings, annualReturn, inflationRate)` | Recurring big expense over a horizon |
+| `HOME_MAINTENANCE_RESERVE(homeValue, annualReservePct, planningYears, currentSavings, annualReturn, inflationRate)` | Build a maintenance reserve as % of (inflating) home value |
+
+```
+=BIG_PURCHASE_FUND(80000, TRUE, 5, 20000, 0.04, 0.025)         # home down payment
+=RECURRING_EXPENSE_FUND(15000, TRUE, 25, 40, 20, 0, 0.04, 0.025)  # roof every 25 yrs
+=HOME_MAINTENANCE_RESERVE(600000, 0.02, 20, 0, 0.04, 0.025)    # 2%/yr reserve
 ```
 
 ---
