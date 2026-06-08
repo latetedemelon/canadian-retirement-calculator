@@ -556,8 +556,10 @@ Comprehensive income breakdown at a specific age.
 | `RESP_PROJECTION` | RESP plan summary vs target | Exact math |
 | `TRIP_SAVINGS_REQUIRED` | Annual savings for yearly trips | Exact math |
 | `TRIP_SAVINGS_SCHEDULE` | Trip sinking-fund schedule | Exact math |
+| `TRIP_PLAN` | Repeating trips (any cadence) over a horizon | Exact math |
 | `CAR_SINKING_FUND` | Savings for next vehicle | Exact math |
 | `CAR_REPLACEMENT_SCHEDULE` | When/what each replacement costs | Exact math |
+| `CAR_LIFETIME_FUND` | Fund every replacement over a lifetime | Exact math |
 | `CAR_TOTAL_COST_OF_OWNERSHIP` | Vehicle TCO, annualized | Exact math |
 
 #### Non-Registered Accounts
@@ -885,27 +887,31 @@ Models the **$8,000/yr** room accrual, the **$8,000 carryforward cap** (max $16,
 
 ## 34. Lifestyle Goals — Trip Savings & Vehicle Planning
 
-### Yearly trip savings
+### Trip savings
 
 | Function | Purpose |
 |----------|---------|
-| `TRIP_SAVINGS_REQUIRED(annualTripBudget, costIsTodaysDollars, numYears, currentSavings, annualReturn, inflationRate)` | Level annual savings to fund a recurring travel budget |
+| `TRIP_SAVINGS_REQUIRED(annualTripBudget, costIsTodaysDollars, numYears, currentSavings, annualReturn, inflationRate)` | Level annual savings to fund a **yearly** travel budget |
 | `TRIP_SAVINGS_SCHEDULE(...)` | Year-by-year fund balance, trip cost, contribution, withdrawal |
+| `TRIP_PLAN(tripCost, costIsTodaysDollars, tripIntervalYears, planningYears, firstTripYearsAway, currentSavings, annualReturn, inflationRate)` | **Repeating trips over a long horizon** — yearly *or* on a multi-year cadence (e.g. a big trip every 3 years for 30 years). One steady contribution; fund never goes negative. |
 
 ```
-=TRIP_SAVINGS_REQUIRED(8000, TRUE, 20, 5000, 0.05, 0.025)
+# A $15,000 trip every 3 years for 30 years:
+=TRIP_PLAN(15000, TRUE, 3, 30, 0, 5000, 0.05, 0.025)
 ```
 
 ### Vehicle planning
 
 | Function | Purpose |
 |----------|---------|
-| `CAR_SINKING_FUND(yearsUntilReplacement, replacementCost, costIsTodaysDollars, currentSavings, annualReturn, inflationRate, tradeInValue)` | Annual & monthly savings for the next vehicle, net of trade-in |
+| `CAR_SINKING_FUND(yearsUntilReplacement, replacementCost, costIsTodaysDollars, currentSavings, annualReturn, inflationRate, tradeInValue)` | Annual & monthly savings for the **next** vehicle, net of trade-in |
 | `CAR_REPLACEMENT_SCHEDULE(currentVehicleAge, replacementIntervalYrs, replacementCost, costIsTodaysDollars, inflationRate, planningYears, tradeInValue)` | **When** each replacement falls due and its **projected cost** |
+| `CAR_LIFETIME_FUND(currentVehicleAge, replacementIntervalYrs, replacementCost, costIsTodaysDollars, currentSavings, annualReturn, inflationRate, planningYears, tradeInValue)` | **One sinking fund that pays for EVERY replacement over a long lifetime** (e.g. a new car every 10 years for 40 years). Returns the required level contribution + a year-by-year fund table. |
 | `CAR_TOTAL_COST_OF_OWNERSHIP(purchasePrice, annualMaintenance, annualInsurance, annualFuelOther, ownershipYears, resaleValue, inflationRate)` | Depreciation + maintenance + insurance + fuel, annualized |
 
 ```
-=CAR_TOTAL_COST_OF_OWNERSHIP(40000, 1200, 1600, 2400, 10, 8000, 0.025)
+# A new car every 10 years for the next 40 years, net of trade-in:
+=CAR_LIFETIME_FUND(3, 10, 40000, TRUE, 5000, 0.04, 0.025, 40, 8000)
 ```
 
 ---

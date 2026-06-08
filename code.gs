@@ -5034,3 +5034,241 @@ function runCoupleProjectionTable_(p1, p2, household, cpp1, oas1, cpp2, oas2) {
     sheet.getRange(headerRow + 1, 1, rows.length, headers.length).setValues(rows);
   }
 }
+
+
+/**
+ * ----------------------------------------------------------------------
+ * SECTION 35 – Lifetime / recurring sinking funds (multi-event)
+ * ----------------------------------------------------------------------
+ *
+ * Whereas CAR_SINKING_FUND funds the NEXT purchase and TRIP_SAVINGS_* funds a
+ * yearly budget, these planners fund a long sequence of lumpy outflows with a
+ * single steady savings stream — e.g. replacing a vehicle every 10 years for
+ * the rest of your life, or a big trip every few years over decades.
+ */
+
+/**
+ * levelContribForOutflows_
+ *
+ * Smallest level annual contribution (paid at the start of each year) such that
+ * a fund — starting at currentSavings and growing at annualReturn — covers every
+ * dated outflow without ever going negative. Solved by binary search so it works
+ * for arbitrary lumpy schedules.
+ *
+ * @param {Array<number>} outflows  Outflow at the start of each year offset (0-based)
+ * @param {number} currentSavings   Opening fund balance
+ * @param {number} annualReturn     Expected annual return (decimal)
+ * @param {number} numYears         Number of years to simulate
+ * @return {number} Required level annual contribution
+ * @private
+ */
+function levelContribForOutflows_(outflows, currentSavings, annualReturn, numYears) {
+  function minBalance(C) {
+    var bal = currentSavings;
+    var lowest = Infinity;
+    for (var t = 0; t < numYears; t++) {
+      bal += C;
+      bal -= (outflows[t] || 0);
+      if (bal < lowest) lowest = bal;   // binding point is right after each outflow
+      bal = bal * (1 + annualReturn);
+    }
+    return lowest;
+  }
+
+  var total = 0;
+  for (var i = 0; i < numYears; i++) total += (outflows[i] || 0);
+  if (total <= 0) return 0;
+  if (minBalance(0) >= 0) return 0;     // current savings already cover everything
+
+  var lo = 0, hi = total;
+  while (minBalance(hi) < 0) hi *= 2;
+  for (var k = 0; k < 100; k++) {
+    var mid = (lo + hi) / 2;
+    if (minBalance(mid) >= 0) hi = mid; else lo = mid;
+  }
+  return hi;
+}
+
+/**
+ * CAR_LIFETIME_FUND
+ *
+ * Plans a single sinking fund that pays for EVERY vehicle replacement over a
+ * long horizon (e.g. a new car every 10 years for the next 40), net of trade-in.
+ * Returns the required level annual contribution and a year-by-year fund table.
+ *
+ * @param {number} currentVehicleAge     Age of your current vehicle (years)
+ * @param {number} replacementIntervalYrs Years you keep a vehicle before replacing
+ * @param {number} replacementCost        Cost of a replacement vehicle
+ * @param {boolean} costIsTodaysDollars   TRUE if cost/trade-in are in today's $
+ * @param {number} currentSavings         Money already earmarked for vehicles
+ * @param {number} annualReturn           Expected annual return (decimal)
+ * @param {number} inflationRate          Inflation rate (decimal)
+ * @param {number} planningYears          Horizon to plan over (years)
+ * @param {number} tradeInValue           Optional: today's-$ trade-in at each replacement
+ *
+ * @return {Array[]} Row 1: ['Required annual contribution', amount]; then a
+ *                    blank row; then Year, Vehicle Age, Replace?, Replacement
+ *                    Cost, Trade-In, Net Outlay, Contribution, Fund Balance
+ * @customfunction
+ *
+ * Example:
+ * =CAR_LIFETIME_FUND(3, 10, 40000, TRUE, 5000, 0.04, 0.025, 40, 8000)
+ */
+function CAR_LIFETIME_FUND(currentVehicleAge, replacementIntervalYrs, replacementCost, costIsTodaysDollars, currentSavings, annualReturn, inflationRate, planningYears, tradeInValue) {
+  currentVehicleAge      = Number(currentVehicleAge) || 0;
+  replacementIntervalYrs = Number(replacementIntervalYrs);
+  replacementCost        = Number(replacementCost);
+  currentSavings         = Number(currentSavings) || 0;
+  annualReturn           = Number(annualReturn);
+  inflationRate          = Number(inflationRate) || 0;
+  planningYears          = Number(planningYears);
+  tradeInValue           = Number(tradeInValue) || 0;
+
+  if (replacementIntervalYrs <= 0) {
+    return [["ERROR: replacementIntervalYrs must be greater than 0"]];
+  }
+  if (planningYears <= 0) {
+    return [["ERROR: planningYears must be greater than 0"]];
+  }
+
+  var inflate = asBool_(costIsTodaysDollars);
+  var startYear = (new Date()).getFullYear();
+  var numYears = planningYears + 1;
+
+  // Build the outflow at each year offset and remember which years are replacements.
+  var outflows = [];
+  var isReplacement = [];
+  for (var t = 0; t < numYears; t++) { outflows[t] = 0; isReplacement[t] = false; }
+
+  var yearsToNext = Math.max(0, replacementIntervalYrs - currentVehicleAge);
+  for (var y = yearsToNext; y <= planningYears; y += replacementIntervalYrs) {
+    var grossCost = inflate ? replacementCost * Math.pow(1 + inflationRate, y) : replacementCost;
+    var tradeIn = inflate ? tradeInValue * Math.pow(1 + inflationRate, y) : tradeInValue;
+    outflows[y] = Math.max(0, grossCost - tradeIn);
+    isReplacement[y] = true;
+  }
+
+  var contribution = levelContribForOutflows_(outflows, currentSavings, annualReturn, numYears);
+
+  // Build the year-by-year schedule.
+  var table = [
+    ['Required annual contribution', Math.round(contribution)],
+    ['≈ Required monthly', Math.round(contribution / 12)],
+    ['', ''],
+    ['Year', 'Vehicle Age', 'Replace?', 'Replacement Cost', 'Trade-In', 'Net Outlay', 'Contribution', 'Fund Balance']
+  ];
+
+  var balance = currentSavings;
+  var vAge = currentVehicleAge;
+  for (var i = 0; i < numYears; i++) {
+    var replacing = isReplacement[i];
+    var displayAge = vAge;
+
+    var grossCostShown = 0, tradeInShown = 0;
+    if (replacing) {
+      grossCostShown = inflate ? replacementCost * Math.pow(1 + inflationRate, i) : replacementCost;
+      tradeInShown = inflate ? tradeInValue * Math.pow(1 + inflationRate, i) : tradeInValue;
+    }
+
+    balance += contribution;
+    balance -= outflows[i];
+    var balAfter = balance;
+    balance = balance * (1 + annualReturn);
+
+    if (replacing) vAge = 0;   // new vehicle this year
+    vAge += 1;                 // age one year for the next row
+
+    table.push([
+      startYear + i,
+      displayAge,
+      replacing ? 'Yes' : '',
+      Math.round(grossCostShown),
+      Math.round(tradeInShown),
+      Math.round(outflows[i]),
+      Math.round(contribution),
+      Math.round(balAfter)
+    ]);
+  }
+
+  return table;
+}
+
+/**
+ * TRIP_PLAN
+ *
+ * Funds a repeating trip over a long horizon — yearly, or on a multi-year cadence
+ * (e.g. a big trip every 3 years for 30 years) — with one level annual savings
+ * stream. Returns the required contribution and a year-by-year fund table.
+ *
+ * @param {number} tripCost             Cost of one trip
+ * @param {boolean} costIsTodaysDollars TRUE to inflate each trip's cost
+ * @param {number} tripIntervalYears    Years between trips (1 = every year)
+ * @param {number} planningYears        Horizon to plan over (years)
+ * @param {number} firstTripYearsAway   Years until the first trip (0 = this year)
+ * @param {number} currentSavings       Money already set aside for trips
+ * @param {number} annualReturn         Expected annual return (decimal)
+ * @param {number} inflationRate        Inflation rate (decimal)
+ *
+ * @return {Array[]} Row 1: ['Required annual contribution', amount]; then a
+ *                    blank row; then Year, Trip?, Trip Cost, Contribution, Fund Balance
+ * @customfunction
+ *
+ * Example (a $15,000 trip every 3 years for 30 years):
+ * =TRIP_PLAN(15000, TRUE, 3, 30, 0, 5000, 0.05, 0.025)
+ */
+function TRIP_PLAN(tripCost, costIsTodaysDollars, tripIntervalYears, planningYears, firstTripYearsAway, currentSavings, annualReturn, inflationRate) {
+  tripCost           = Number(tripCost);
+  tripIntervalYears  = Number(tripIntervalYears) || 1;
+  planningYears      = Number(planningYears);
+  firstTripYearsAway = Number(firstTripYearsAway) || 0;
+  currentSavings     = Number(currentSavings) || 0;
+  annualReturn       = Number(annualReturn);
+  inflationRate      = Number(inflationRate) || 0;
+
+  if (tripIntervalYears <= 0) {
+    return [["ERROR: tripIntervalYears must be greater than 0"]];
+  }
+  if (planningYears <= 0) {
+    return [["ERROR: planningYears must be greater than 0"]];
+  }
+
+  var inflate = asBool_(costIsTodaysDollars);
+  var startYear = (new Date()).getFullYear();
+  var numYears = planningYears + 1;
+
+  var outflows = [];
+  var isTrip = [];
+  for (var t = 0; t < numYears; t++) { outflows[t] = 0; isTrip[t] = false; }
+
+  for (var y = Math.max(0, firstTripYearsAway); y <= planningYears; y += tripIntervalYears) {
+    outflows[y] = inflate ? tripCost * Math.pow(1 + inflationRate, y) : tripCost;
+    isTrip[y] = true;
+  }
+
+  var contribution = levelContribForOutflows_(outflows, currentSavings, annualReturn, numYears);
+
+  var table = [
+    ['Required annual contribution', Math.round(contribution)],
+    ['≈ Required monthly', Math.round(contribution / 12)],
+    ['', ''],
+    ['Year', 'Trip?', 'Trip Cost', 'Contribution', 'Fund Balance']
+  ];
+
+  var balance = currentSavings;
+  for (var i = 0; i < numYears; i++) {
+    balance += contribution;
+    balance -= outflows[i];
+    var balAfter = balance;
+    balance = balance * (1 + annualReturn);
+
+    table.push([
+      startYear + i,
+      isTrip[i] ? 'Yes' : '',
+      Math.round(outflows[i]),
+      Math.round(contribution),
+      Math.round(balAfter)
+    ]);
+  }
+
+  return table;
+}
