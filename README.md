@@ -5,10 +5,15 @@ A comprehensive Google Sheets–based retirement planning tool designed specific
 This project provides a Google Apps Script file (`code.gs`) that plugs into a Google Sheet and gives you:
 
 - **RRSP & TFSA** accumulation and decumulation modelling in **real (inflation-adjusted) dollars**
+- **FHSA (First Home Savings Account)** contribution-room estimation
 - **CPP (Canada Pension Plan)** benefit calculator with early/late adjustment factors
 - **OAS (Old Age Security)** calculator with deferral bonuses and clawback calculations
 - **GIS (Guaranteed Income Supplement)** calculator for low-income retirees
 - **RRIF** mandatory minimum withdrawal calculator
+- **Defined-benefit pension** payout projection from plan parameters (now wired into the projection flow)
+- **Couple / household planning** — a two-person projection with per-spouse taxation
+- **RESP / CESG education planner** — year-by-year schedule with grant and lifetime caps
+- **Lifestyle goals** — recurring yearly **trip savings** and full **vehicle planning** (sinking fund, replacement schedule, total cost of ownership)
 - **Tax estimation** for all 13 provinces and territories (2024 brackets)
 - And many more retirement planning functions...
 
@@ -45,6 +50,11 @@ This project provides a Google Apps Script file (`code.gs`) that plugs into a Go
 27. [Retirement Income Summary](#27-retirement-income-summary)
 28. [Function Quick Reference](#28-function-quick-reference)
 29. [Single-Scenario Retirement Workbook Flow](#29-single-scenario-retirement-workbook-flow)
+30. [New Optional Named Ranges](#30-new-optional-named-ranges-single-person-projection)
+31. [Couple / Household Projection](#31-couple--household-projection)
+32. [RESP / CESG Education Planner](#32-resp--cesg-education-planner)
+33. [FHSA Contribution Room](#33-fhsa-contribution-room)
+34. [Lifestyle Goals — Trip Savings & Vehicle Planning](#34-lifestyle-goals--trip-savings--vehicle-planning)
 
 ---
 
@@ -536,6 +546,19 @@ Comprehensive income breakdown at a specific age.
 |----------|---------|----------|
 | `RRSP_CONTRIBUTION_ROOM` | Available RRSP room | Exact formula |
 | `TFSA_CONTRIBUTION_ROOM` | Available TFSA room | Exact (historical limits) |
+| `FHSA_CONTRIBUTION_ROOM` | Available FHSA room | Approximation (carryforward) |
+
+#### Education, Trips & Vehicles
+| Function | Purpose | Accuracy |
+|----------|---------|----------|
+| `RESP_SUGGESTED_CONTRIBUTION` | RESP contribution to hit target | Exact math |
+| `RESP_SCHEDULE` | Year-by-year RESP + CESG schedule | Exact (CESG caps) |
+| `RESP_PROJECTION` | RESP plan summary vs target | Exact math |
+| `TRIP_SAVINGS_REQUIRED` | Annual savings for yearly trips | Exact math |
+| `TRIP_SAVINGS_SCHEDULE` | Trip sinking-fund schedule | Exact math |
+| `CAR_SINKING_FUND` | Savings for next vehicle | Exact math |
+| `CAR_REPLACEMENT_SCHEDULE` | When/what each replacement costs | Exact math |
+| `CAR_TOTAL_COST_OF_OWNERSHIP` | Vehicle TCO, annualized | Exact math |
 
 #### Non-Registered Accounts
 | Function | Purpose | Accuracy |
@@ -680,9 +703,9 @@ The projection table appears in the **Calcs** sheet starting at **row 50** (head
 2. **Age** - Your age
 3. **Employment Income** - Income from work (before retirement)
 4. **CPP Income** - CPP benefits (starts at cpp_start_age)
-5. **OAS Income** - OAS benefits (starts at oas_start_age)
-6. **DB Pension** - Defined benefit pension (placeholder for future)
-7. **Other Income** - Other income sources (placeholder for future)
+5. **OAS Income** - OAS benefits (starts at oas_start_age), **net of any OAS clawback**
+6. **DB Pension** - Defined-benefit pension, read from the `db_pension_annual_today` / `db_pension_start_age` named ranges (derive the amount with `=PENSION_INCOME_PROJECTED(...)`)
+7. **Other Income** - Additional streams (rental, annuity, part-time…) pulled from the **OTHER_INCOME** sheet by age
 8. **Gross Income** - Total income before tax
 9. **Taxes** - Estimated income tax
 10. **Net Income** - Income after tax
@@ -761,19 +784,20 @@ This aims to provide consistent purchasing power (target_net_income_today) throu
 
 **Current Limitations:**
 - CPP/OAS estimates are simplified (real Service Canada amounts may vary)
-- Tax calculation is approximate (not province-specific, no credits)
-- Assumes one person (no spouse modeling)
-- No RRIF minimum withdrawal enforcement
-- No OAS clawback calculation
-- DB Pension and Other Income columns are placeholders
+- Tax calculation is approximate (inflation-adjusted simple brackets, not province-specific credits)
+- No RRIF minimum withdrawal enforcement in the projection table (the portfolio is modelled as a single pooled balance; use `RRIF_SCHEDULE` / `RRIF_MIN_WITHDRAWAL` separately)
+- OAS clawback uses pre-withdrawal income (avoids a circular dependency) — a documented simplification
+
+**Now supported (previously limitations):**
+- ✅ **Spouse / household modeling** — see [Couple Projection](#couple--household-projection)
+- ✅ **DB pension** wired into the DB Pension column via named ranges
+- ✅ **OAS clawback** applied to OAS income
+- ✅ **OTHER_INCOME sheet** folded into the Other Income column
 
 **Future Enhancements:**
-- Integration with existing `ESTIMATE_TAX()` for province-specific taxes
-- RRIF minimum withdrawals (age 71+)
-- OAS clawback based on income
-- Spouse/family modeling
+- Integration with existing `ESTIMATE_TAX()` for province-specific brackets in the projection
+- RRIF minimum withdrawals (age 71+) enforced inside the projection table
 - Monte Carlo simulation for multiple scenarios
-- Integration with OTHER_INCOME sheet
 
 ### Troubleshooting
 
@@ -794,6 +818,95 @@ This aims to provide consistent purchasing power (target_net_income_today) throu
 - Check that current_age < retirement_age < life_expectancy_age
 - Verify all named ranges have valid numeric values
 - Look for error messages in the toast notification
+
+---
+
+## 30. New Optional Named Ranges (single-person projection)
+
+These are **optional** — leave them out and the projection behaves exactly as before.
+
+| Named Range | Cell (example) | Description |
+|-------------|----------------|-------------|
+| `db_pension_annual_today` | Inputs!B20 | DB pension annual amount (today's $). Derive with `=PENSION_INCOME_PROJECTED(...)` and paste the result here. |
+| `db_pension_start_age` | Inputs!B21 | Age the DB pension starts (defaults to retirement age). |
+| `include_other_income` | Inputs!B22 | TRUE/FALSE — fold the OTHER_INCOME sheet into the projection (default TRUE). |
+| `apply_oas_clawback` | Inputs!B23 | TRUE/FALSE — apply the OAS recovery tax (default TRUE). |
+
+> **Avoid double-counting:** CPP, OAS, and the DB pension are modelled directly. Use the **OTHER_INCOME** sheet only for *additional* streams (rental, annuity, part-time work).
+
+---
+
+## 31. Couple / Household Projection
+
+Run **Retirement → Run Couple Projection** to build a two-person household plan written to a **Calcs_Couple** sheet. Each spouse keeps their own ages, balances, contributions, employment income, CPP/OAS, and DB pension. The key benefit: **tax is computed per person**, and a combined household after-tax target is met by drawing from the **lower-income spouse first** (staying in lower brackets).
+
+### Person 2 named ranges
+
+Person 2 reuses person 1's named ranges with a **`_2` suffix**. Shared/household ranges (`current_year`, `inflation_rate`, `real_return`, `target_net_income_today`) are read **once** without a suffix. Any missing `_2` range falls back to a default, so you only fill in what differs.
+
+| Person 2 Named Range | Description |
+|----------------------|-------------|
+| `current_age_2`, `retirement_age_2`, `life_expectancy_age_2` | Spouse ages |
+| `cpp_start_age_2`, `oas_start_age_2` | Spouse benefit start ages |
+| `current_income_2`, `annual_contrib_2` | Spouse income & contributions |
+| `rrsp_balance_now_2`, `tfsa_balance_now_2`, `taxable_balance_now_2` | Spouse balances |
+| `db_pension_annual_today_2`, `db_pension_start_age_2` | Spouse DB pension |
+| `cpp_contribs_range_2` | (Optional) spouse CPP contribution history |
+
+The **target_net_income_today** range is treated as the **combined household** after-tax spending target.
+
+---
+
+## 32. RESP / CESG Education Planner
+
+Ports the dedicated education-savings logic, including the **20% CESG** grant, its **$500/yr** and **$7,200 lifetime** caps, and the **$50,000 lifetime contribution** limit.
+
+| Function | Purpose |
+|----------|---------|
+| `RESP_SUGGESTED_CONTRIBUTION(beneficiaryAge, ageNeeded, targetCost, targetIsTodaysDollars, currentBalance, annualReturn, inflationRate)` | Level annual contribution (before grant) to hit the education target |
+| `RESP_SCHEDULE(beneficiaryAge, ageNeeded, currentBalance, annualReturn, annualContribution[, startYear])` | Year-by-year table: opening, contribution, CESG, growth, closing |
+| `RESP_PROJECTION(beneficiaryAge, ageNeeded, targetCost, targetIsTodaysDollars, currentBalance, annualReturn, inflationRate, annualContribution)` | Summary: projected vs target, lifetime grant/contributions, status |
+
+```
+=RESP_PROJECTION(2, 18, 120000, TRUE, 5000, 0.055, 0.025, 2500)
+```
+
+---
+
+## 33. FHSA Contribution Room
+
+```
+=FHSA_CONTRIBUTION_ROOM(yearOpened, currentYear, totalContributedToDate)
+```
+
+Models the **$8,000/yr** room accrual, the **$8,000 carryforward cap** (max $16,000 in any single year), and the **$40,000 lifetime** limit.
+
+---
+
+## 34. Lifestyle Goals — Trip Savings & Vehicle Planning
+
+### Yearly trip savings
+
+| Function | Purpose |
+|----------|---------|
+| `TRIP_SAVINGS_REQUIRED(annualTripBudget, costIsTodaysDollars, numYears, currentSavings, annualReturn, inflationRate)` | Level annual savings to fund a recurring travel budget |
+| `TRIP_SAVINGS_SCHEDULE(...)` | Year-by-year fund balance, trip cost, contribution, withdrawal |
+
+```
+=TRIP_SAVINGS_REQUIRED(8000, TRUE, 20, 5000, 0.05, 0.025)
+```
+
+### Vehicle planning
+
+| Function | Purpose |
+|----------|---------|
+| `CAR_SINKING_FUND(yearsUntilReplacement, replacementCost, costIsTodaysDollars, currentSavings, annualReturn, inflationRate, tradeInValue)` | Annual & monthly savings for the next vehicle, net of trade-in |
+| `CAR_REPLACEMENT_SCHEDULE(currentVehicleAge, replacementIntervalYrs, replacementCost, costIsTodaysDollars, inflationRate, planningYears, tradeInValue)` | **When** each replacement falls due and its **projected cost** |
+| `CAR_TOTAL_COST_OF_OWNERSHIP(purchasePrice, annualMaintenance, annualInsurance, annualFuelOther, ownershipYears, resaleValue, inflationRate)` | Depreciation + maintenance + insurance + fuel, annualized |
+
+```
+=CAR_TOTAL_COST_OF_OWNERSHIP(40000, 1200, 1600, 2400, 10, 8000, 0.025)
+```
 
 ---
 

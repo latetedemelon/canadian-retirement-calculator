@@ -740,6 +740,7 @@ function onOpen() {
     .addItem('Show OAS Comparison', 'insertOASComparison_')
     .addSeparator()
     .addItem('Run Projection', 'runProjection')
+    .addItem('Run Couple Projection', 'runCoupleProjection')
     .addToUi();
 }
 
@@ -3495,7 +3496,31 @@ function readInputs_() {
   // Convert percentages to decimals
   inputs.realReturn = inputs.realReturnPct / 100;
   inputs.inflation = inputs.inflationRatePct / 100;
-  
+
+  // Optional inputs — absent named ranges fall back to sensible defaults so
+  // existing workbooks keep working without any extra setup.
+  function getOptionalNamedValue(name, fallback) {
+    var range = ss.getRangeByName(name);
+    if (!range) return fallback;
+    var v = range.getValue();
+    if (v === '' || v === null) return fallback;
+    return v;
+  }
+
+  // Defined-benefit pension wired into the projection's "DB Pension" column.
+  // Provide the annual amount in today's dollars and the age it starts. If you
+  // don't yet know the amount, derive it with =PENSION_INCOME_PROJECTED(...) and
+  // paste the result into the db_pension_annual_today cell.
+  inputs.dbPensionAnnualToday = Number(getOptionalNamedValue('db_pension_annual_today', 0)) || 0;
+  inputs.dbPensionStartAge = Number(getOptionalNamedValue('db_pension_start_age', inputs.retirementAge)) || inputs.retirementAge;
+
+  // Whether to fold the OTHER_INCOME sheet (rentals, annuities, part-time, etc.)
+  // into the projection's "Other Income" column. Defaults to true.
+  inputs.includeOtherIncome = asBool_(getOptionalNamedValue('include_other_income', true));
+
+  // Whether to apply the OAS recovery tax (clawback) when income is high.
+  inputs.applyOasClawback = asBool_(getOptionalNamedValue('apply_oas_clawback', true));
+
   // Compute derived values
   inputs.totalBalanceNow = inputs.rrspBalanceNow + inputs.tfsaBalanceNow + inputs.taxableBalanceNow;
   
@@ -3770,18 +3795,47 @@ function runProjectionTable_(inputs, cppResult, oasResult) {
     if (age >= cppResult.startAge) {
       cppIncome = inflateToYear_(cppResult.annualAtStartToday, inputs.currentYear, year, inputs.inflation);
     }
-    
+
     // OAS income (starts at oas_start_age)
     var oasIncome = 0;
     if (age >= oasResult.startAge) {
       oasIncome = inflateToYear_(oasResult.annualAtStartToday, inputs.currentYear, year, inputs.inflation);
     }
-    
-    // DB Pension and Other Income (placeholder for future expansion)
+
+    // DB Pension — starts at its own start age, indexed with inflation.
     var dbPension = 0;
-    var otherIncome = 0;
-    
-    // Gross income before withdrawals
+    if (inputs.dbPensionAnnualToday > 0 && age >= inputs.dbPensionStartAge) {
+      dbPension = inflateToYear_(inputs.dbPensionAnnualToday, inputs.currentYear, year, inputs.inflation);
+    }
+
+    // Other income from the OTHER_INCOME sheet (rentals, annuities, part-time…).
+    // CPP/OAS/DB are modelled above, so list only *additional* streams there to
+    // avoid double-counting. Amounts are stored in today's $ and inflated here.
+    var otherTaxable = 0;
+    var otherNonTaxable = 0;
+    if (inputs.includeOtherIncome) {
+      var oi = getOtherIncomeForAge_(age);
+      otherTaxable = inflateToYear_(oi.taxable, inputs.currentYear, year, inputs.inflation);
+      otherNonTaxable = inflateToYear_(oi.nonTaxable, inputs.currentYear, year, inputs.inflation);
+    }
+    var otherIncome = otherTaxable + otherNonTaxable;
+
+    // OAS recovery tax (clawback) — reduces net OAS once net income clears the
+    // threshold. Based on pre-withdrawal taxable income (a documented
+    // simplification that avoids a circular dependency with withdrawals). The
+    // 2024 threshold is indexed forward with inflation to match this nominal
+    // projection.
+    var oasClawback = 0;
+    if (inputs.applyOasClawback && oasIncome > 0) {
+      var clawbackThreshold = inflateToYear_(OAS_2024.CLAWBACK_THRESHOLD, inputs.currentYear, year, inputs.inflation);
+      var incomeForClawback = employmentIncome + cppIncome + oasIncome + dbPension + otherTaxable;
+      if (incomeForClawback > clawbackThreshold) {
+        oasClawback = Math.min((incomeForClawback - clawbackThreshold) * OAS_2024.CLAWBACK_RATE, oasIncome);
+        oasIncome -= oasClawback;
+      }
+    }
+
+    // Gross income before withdrawals (OAS already net of any clawback)
     var grossIncomeBeforeWithdrawal = employmentIncome + cppIncome + oasIncome + dbPension + otherIncome;
     
     // Contributions (only pre-retirement)
@@ -3799,27 +3853,28 @@ function runProjectionTable_(inputs, cppResult, oasResult) {
     if (age >= inputs.retirementAge) {
       // Target net income for this year
       var targetNetThisYear = inflateToYear_(inputs.targetNetIncomeToday, inputs.currentYear, year, inputs.inflation);
-      
-      // Compute tax on income before withdrawal
-      var taxBeforeWithdrawal = computeTax_(grossIncomeBeforeWithdrawal, inputs, year);
+
+      // Compute tax on income before withdrawal. Non-taxable other income is
+      // excluded from the tax base but still counts toward net cashflow.
+      var taxBeforeWithdrawal = computeTax_(grossIncomeBeforeWithdrawal - otherNonTaxable, inputs, year);
       var netBeforeWithdrawal = grossIncomeBeforeWithdrawal - taxBeforeWithdrawal;
-      
+
       // Determine withdrawal needed to reach target net income
       var netGap = targetNetThisYear - netBeforeWithdrawal;
-      
+
       if (netGap > 0 && portfolioBalance > 0) {
         // Approximate marginal tax rate for withdrawal
-        var marginalRate = computeMarginalRate_(grossIncomeBeforeWithdrawal, inputs, year);
-        
+        var marginalRate = computeMarginalRate_(grossIncomeBeforeWithdrawal - otherNonTaxable, inputs, year);
+
         // Withdrawal needed: netGap / (1 - marginalRate)
         var withdrawalNeeded = netGap / (1 - marginalRate);
         withdrawalNeeded = Math.max(0, Math.min(withdrawalNeeded, portfolioBalance));
-        
+
         withdrawals = withdrawalNeeded;
         grossIncome = grossIncomeBeforeWithdrawal + withdrawals;
-        
-        // Recompute taxes with withdrawal included
-        taxes = computeTax_(grossIncome, inputs, year);
+
+        // Recompute taxes with withdrawal included (treated as taxable income)
+        taxes = computeTax_(grossIncome - otherNonTaxable, inputs, year);
         netIncome = grossIncome - taxes;
       } else {
         grossIncome = grossIncomeBeforeWithdrawal;
@@ -3827,8 +3882,8 @@ function runProjectionTable_(inputs, cppResult, oasResult) {
         netIncome = netBeforeWithdrawal;
       }
     } else {
-      // Pre-retirement: simple tax calculation
-      taxes = computeTax_(grossIncome, inputs, year);
+      // Pre-retirement: simple tax calculation (non-taxable income excluded)
+      taxes = computeTax_(grossIncome - otherNonTaxable, inputs, year);
       netIncome = grossIncome - taxes;
     }
     
@@ -3963,4 +4018,1019 @@ function inflateToYear_(value, baseYear, targetYear, inflationRate) {
 function discountToYearZero_(value, baseYear, year, inflationRate) {
   var years = year - baseYear;
   return value / Math.pow(1 + inflationRate, years);
+}
+
+
+/**
+ * ----------------------------------------------------------------------
+ * SECTION 30 – Shared annuity helpers
+ * ----------------------------------------------------------------------
+ */
+
+/**
+ * pmtAnnuityDue_
+ *
+ * Level payment made at the START of each period (annuity due) required to
+ * grow from zero to a target future value.
+ *
+ * @param {number} rate  Periodic return (decimal)
+ * @param {number} nper  Number of periods
+ * @param {number} fv    Target future value (positive)
+ * @return {number} Required level payment (positive)
+ * @private
+ */
+function pmtAnnuityDue_(rate, nper, fv) {
+  nper = Number(nper);
+  fv = Number(fv);
+  if (nper <= 0) return fv;
+  if (!rate) return fv / nper;
+  // FV of an annuity due = pmt * ((1+r)^n - 1)/r * (1+r)
+  return fv * rate / ((Math.pow(1 + rate, nper) - 1) * (1 + rate));
+}
+
+
+/**
+ * ----------------------------------------------------------------------
+ * SECTION 31 – RESP / CESG Education Planner
+ * ----------------------------------------------------------------------
+ *
+ * Ports the spreadsheet "RESP Planner" tab into script form. Models the 20%
+ * Canada Education Savings Grant (CESG), its $500/yr and $7,200 lifetime caps,
+ * and the $50,000 lifetime contribution limit, with a year-by-year schedule.
+ */
+
+var RESP_CONSTANTS = {
+  CESG_MATCH_RATE: 0.20,            // 20% government grant on contributions
+  CESG_ANNUAL_MAX: 500,            // Paid on the first $2,500 contributed per year
+  CESG_LIFETIME_MAX: 7200,         // Lifetime grant cap per child
+  CONTRIB_LIFETIME_MAX: 50000      // Lifetime contribution limit per beneficiary
+};
+
+/**
+ * respFutureTarget_
+ * Converts a target education cost to future dollars at the year funds are needed.
+ * @private
+ */
+function respFutureTarget_(targetCost, targetIsTodaysDollars, years, inflationRate) {
+  if (asBool_(targetIsTodaysDollars)) {
+    return targetCost * Math.pow(1 + inflationRate, years);
+  }
+  return targetCost;
+}
+
+/**
+ * respRunSchedule_
+ *
+ * Shared engine that runs the RESP year-by-year accumulation with CESG and the
+ * lifetime caps. Returns both the rows and summary totals.
+ * @private
+ */
+function respRunSchedule_(beneficiaryAge, ageNeeded, currentBalance, annualReturn, annualContribution, startYear) {
+  var rows = [];
+  var balance = Number(currentBalance) || 0;
+  var cumContrib = 0;
+  var cumCesg = 0;
+
+  for (var age = beneficiaryAge; age < ageNeeded; age++) {
+    var opening = balance;
+
+    // Contribution is capped by the remaining lifetime contribution room.
+    var contribRoom = Math.max(0, RESP_CONSTANTS.CONTRIB_LIFETIME_MAX - cumContrib);
+    var contribution = Math.max(0, Math.min(annualContribution, contribRoom));
+
+    // CESG = 20% of contribution, capped at $500/yr and the remaining lifetime grant.
+    var grantRoom = Math.max(0, RESP_CONSTANTS.CESG_LIFETIME_MAX - cumCesg);
+    var cesg = Math.min(RESP_CONSTANTS.CESG_MATCH_RATE * contribution, RESP_CONSTANTS.CESG_ANNUAL_MAX, grantRoom);
+
+    var growth = (opening + contribution + cesg) * annualReturn;
+    var closing = opening + contribution + cesg + growth;
+
+    cumContrib += contribution;
+    cumCesg += cesg;
+    balance = closing;
+
+    rows.push([
+      age,
+      startYear + (age - beneficiaryAge),
+      Math.round(opening),
+      Math.round(contribution),
+      Math.round(cumContrib),
+      Math.round(cesg),
+      Math.round(cumCesg),
+      Math.round(growth),
+      Math.round(closing)
+    ]);
+  }
+
+  return {
+    rows: rows,
+    projectedBalance: balance,
+    lifetimeContrib: cumContrib,
+    lifetimeCesg: cumCesg
+  };
+}
+
+/**
+ * RESP_SUGGESTED_CONTRIBUTION
+ *
+ * Suggests the level annual contribution that, together with the 20% CESG,
+ * grows the current balance to the education target by the year funds are needed.
+ *
+ * @param {number} beneficiaryAge        Child's current age
+ * @param {number} ageNeeded             Age when funds are needed (e.g. 18)
+ * @param {number} targetCost            Target education cost
+ * @param {boolean} targetIsTodaysDollars TRUE if targetCost is in today's $
+ * @param {number} currentBalance        Current RESP balance
+ * @param {number} annualReturn          Expected annual return (decimal, e.g. 0.055)
+ * @param {number} inflationRate         Inflation rate (decimal, e.g. 0.025)
+ *
+ * @return {number} Suggested annual contribution (before grant)
+ * @customfunction
+ *
+ * Example:
+ * =RESP_SUGGESTED_CONTRIBUTION(2, 18, 120000, TRUE, 5000, 0.055, 0.025)
+ */
+function RESP_SUGGESTED_CONTRIBUTION(beneficiaryAge, ageNeeded, targetCost, targetIsTodaysDollars, currentBalance, annualReturn, inflationRate) {
+  beneficiaryAge  = Number(beneficiaryAge);
+  ageNeeded       = Number(ageNeeded);
+  targetCost      = Number(targetCost);
+  currentBalance  = Number(currentBalance) || 0;
+  annualReturn    = Number(annualReturn);
+  inflationRate   = Number(inflationRate) || 0;
+
+  var years = Math.max(0, ageNeeded - beneficiaryAge);
+  if (years <= 0) return 0;
+
+  var futureTarget = respFutureTarget_(targetCost, targetIsTodaysDollars, years, inflationRate);
+  var fvCurrent = currentBalance * Math.pow(1 + annualReturn, years);
+  var gap = Math.max(0, futureTarget - fvCurrent);
+
+  // Required level deposit of (contribution + grant) as an annuity due.
+  var depositNeeded = pmtAnnuityDue_(annualReturn, years, gap);
+
+  // Back out the contribution from "contribution + 20% grant", respecting the
+  // $500/yr grant ceiling (grant stops growing past $2,500 of contribution).
+  var grantCeilingDeposit = (RESP_CONSTANTS.CESG_ANNUAL_MAX / RESP_CONSTANTS.CESG_MATCH_RATE) * (1 + RESP_CONSTANTS.CESG_MATCH_RATE);
+  var contribution;
+  if (depositNeeded <= grantCeilingDeposit) {
+    contribution = depositNeeded / (1 + RESP_CONSTANTS.CESG_MATCH_RATE);
+  } else {
+    contribution = depositNeeded - RESP_CONSTANTS.CESG_ANNUAL_MAX;
+  }
+
+  // Respect the lifetime contribution cap spread over the funding horizon.
+  contribution = Math.min(contribution, RESP_CONSTANTS.CONTRIB_LIFETIME_MAX / years);
+
+  return Math.round(Math.max(0, contribution));
+}
+
+/**
+ * RESP_SCHEDULE
+ *
+ * Year-by-year RESP accumulation schedule with CESG and lifetime caps.
+ *
+ * @param {number} beneficiaryAge     Child's current age
+ * @param {number} ageNeeded          Age when funds are needed (e.g. 18)
+ * @param {number} currentBalance     Current RESP balance
+ * @param {number} annualReturn       Expected annual return (decimal)
+ * @param {number} annualContribution Planned annual contribution (before grant)
+ * @param {number} startYear          Optional: first calendar year (defaults to this year)
+ *
+ * @return {Array[]} Table: Age, Year, Opening, Contribution, Cum. Contrib,
+ *                    CESG, Cum. CESG, Growth, Closing
+ * @customfunction
+ *
+ * Example:
+ * =RESP_SCHEDULE(2, 18, 5000, 0.055, 2500)
+ */
+function RESP_SCHEDULE(beneficiaryAge, ageNeeded, currentBalance, annualReturn, annualContribution, startYear) {
+  beneficiaryAge     = Number(beneficiaryAge);
+  ageNeeded          = Number(ageNeeded);
+  currentBalance     = Number(currentBalance) || 0;
+  annualReturn       = Number(annualReturn);
+  annualContribution = Number(annualContribution) || 0;
+  startYear          = Number(startYear) || (new Date()).getFullYear();
+
+  if (ageNeeded <= beneficiaryAge) {
+    return [["ERROR: ageNeeded must be greater than beneficiaryAge"]];
+  }
+
+  var result = respRunSchedule_(beneficiaryAge, ageNeeded, currentBalance, annualReturn, annualContribution, startYear);
+  var table = [[
+    'Age', 'Year', 'Opening Balance', 'Contribution', 'Cum. Contrib.',
+    'CESG (Grant)', 'Cum. CESG', 'Growth', 'Closing Balance'
+  ]];
+  return table.concat(result.rows);
+}
+
+/**
+ * RESP_PROJECTION
+ *
+ * Summary of an RESP plan: projected balance vs target, lifetime grant and
+ * contributions captured, and a status flag.
+ *
+ * @param {number} beneficiaryAge        Child's current age
+ * @param {number} ageNeeded             Age when funds are needed
+ * @param {number} targetCost            Target education cost
+ * @param {boolean} targetIsTodaysDollars TRUE if targetCost is in today's $
+ * @param {number} currentBalance        Current RESP balance
+ * @param {number} annualReturn          Expected annual return (decimal)
+ * @param {number} inflationRate         Inflation rate (decimal)
+ * @param {number} annualContribution    Planned annual contribution (before grant)
+ *
+ * @return {Array[]} Two-column summary table
+ * @customfunction
+ *
+ * Example:
+ * =RESP_PROJECTION(2, 18, 120000, TRUE, 5000, 0.055, 0.025, 2500)
+ */
+function RESP_PROJECTION(beneficiaryAge, ageNeeded, targetCost, targetIsTodaysDollars, currentBalance, annualReturn, inflationRate, annualContribution) {
+  beneficiaryAge     = Number(beneficiaryAge);
+  ageNeeded          = Number(ageNeeded);
+  targetCost         = Number(targetCost);
+  currentBalance     = Number(currentBalance) || 0;
+  annualReturn       = Number(annualReturn);
+  inflationRate      = Number(inflationRate) || 0;
+  annualContribution = Number(annualContribution) || 0;
+
+  if (ageNeeded <= beneficiaryAge) {
+    return [["ERROR: ageNeeded must be greater than beneficiaryAge"]];
+  }
+
+  var years = ageNeeded - beneficiaryAge;
+  var futureTarget = respFutureTarget_(targetCost, targetIsTodaysDollars, years, inflationRate);
+  var result = respRunSchedule_(beneficiaryAge, ageNeeded, currentBalance, annualReturn, annualContribution, (new Date()).getFullYear());
+
+  var surplus = result.projectedBalance - futureTarget;
+  var status;
+  if (surplus >= 0) {
+    status = 'On track';
+  } else if (result.lifetimeContrib >= RESP_CONSTANTS.CONTRIB_LIFETIME_MAX - 1) {
+    status = 'RESP capped — fund remainder from TFSA / non-registered';
+  } else {
+    status = 'Increase the annual contribution';
+  }
+
+  return [
+    ['RESP Plan Summary', ''],
+    ['Years until needed', years],
+    ['Target (future $)', Math.round(futureTarget)],
+    ['Projected balance when needed', Math.round(result.projectedBalance)],
+    ['Surplus / (shortfall)', Math.round(surplus)],
+    ['Lifetime CESG captured', Math.round(result.lifetimeCesg)],
+    ['Lifetime contributions', Math.round(result.lifetimeContrib)],
+    ['Suggested annual contribution', RESP_SUGGESTED_CONTRIBUTION(beneficiaryAge, ageNeeded, targetCost, targetIsTodaysDollars, currentBalance, annualReturn, inflationRate)],
+    ['Status', status]
+  ];
+}
+
+
+/**
+ * ----------------------------------------------------------------------
+ * SECTION 32 – FHSA (First Home Savings Account) Contribution Room
+ * ----------------------------------------------------------------------
+ */
+
+/**
+ * FHSA_CONTRIBUTION_ROOM
+ *
+ * Estimates available FHSA room. Rules: $8,000 of room accrues each year from
+ * the year the account is opened; unused room carries forward but the carry-
+ * forward is capped at $8,000 (so the most you can contribute in any single
+ * year is $16,000); the lifetime limit is $40,000.
+ *
+ * Note: because exact carryforward depends on each year's contribution history,
+ * this uses total-contributed-to-date as an approximation and is clearly bounded
+ * by the single-year ($16,000) and lifetime ($40,000) limits.
+ *
+ * @param {number} yearOpened             Calendar year the FHSA was opened
+ * @param {number} currentYear            Current calendar year
+ * @param {number} totalContributedToDate Total contributed so far (all years)
+ *
+ * @return {number} Estimated available FHSA contribution room this year
+ * @customfunction
+ *
+ * Example:
+ * =FHSA_CONTRIBUTION_ROOM(2023, 2026, 8000)
+ */
+function FHSA_CONTRIBUTION_ROOM(yearOpened, currentYear, totalContributedToDate) {
+  yearOpened             = Number(yearOpened);
+  currentYear            = Number(currentYear) || (new Date()).getFullYear();
+  totalContributedToDate = Number(totalContributedToDate) || 0;
+
+  var ANNUAL = 8000;
+  var LIFETIME = 40000;
+  var MAX_SINGLE_YEAR = ANNUAL * 2; // current-year room + one year of carryforward
+
+  if (currentYear < yearOpened) {
+    return 0;
+  }
+
+  var yearsOpen = currentYear - yearOpened + 1;
+  // Room accrues at $8,000/yr but stops once the $40,000 lifetime room is granted.
+  var roomAccrued = Math.min(yearsOpen, LIFETIME / ANNUAL) * ANNUAL;
+
+  var remainingLifetime = Math.max(0, LIFETIME - totalContributedToDate);
+  var remainingAccrued = Math.max(0, roomAccrued - totalContributedToDate);
+
+  // Bounded by the single-year cap and remaining lifetime room.
+  var available = Math.min(remainingAccrued, MAX_SINGLE_YEAR, remainingLifetime);
+
+  return Math.round(Math.max(0, available) * 100) / 100;
+}
+
+
+/**
+ * ----------------------------------------------------------------------
+ * SECTION 33 – Lifestyle goals: trip savings & vehicle planning
+ * ----------------------------------------------------------------------
+ *
+ * Purpose-built helpers for two common recurring goals that the generic Goals
+ * tab only handled as one-off lump sums: funding a yearly travel budget, and
+ * planning the ongoing cost and periodic replacement of a vehicle.
+ */
+
+/**
+ * TRIP_SAVINGS_REQUIRED
+ *
+ * Level annual contribution needed to fund a recurring yearly travel budget for
+ * a number of years, drawing each trip's cost at the start of its year. When the
+ * budget is in today's dollars it is inflated each year to preserve purchasing
+ * power; otherwise it is treated as a fixed nominal amount.
+ *
+ * @param {number} annualTripBudget     Cost of one year's trip(s)
+ * @param {boolean} costIsTodaysDollars TRUE to inflate the budget each year
+ * @param {number} numYears             Number of years of trips to fund
+ * @param {number} currentSavings       Money already set aside for trips
+ * @param {number} annualReturn         Expected annual return (decimal)
+ * @param {number} inflationRate        Inflation rate (decimal)
+ *
+ * @return {number} Required level annual contribution
+ * @customfunction
+ *
+ * Example:
+ * =TRIP_SAVINGS_REQUIRED(8000, TRUE, 20, 5000, 0.05, 0.025)
+ */
+function TRIP_SAVINGS_REQUIRED(annualTripBudget, costIsTodaysDollars, numYears, currentSavings, annualReturn, inflationRate) {
+  annualTripBudget = Number(annualTripBudget);
+  numYears         = Number(numYears);
+  currentSavings   = Number(currentSavings) || 0;
+  annualReturn     = Number(annualReturn);
+  inflationRate    = Number(inflationRate) || 0;
+
+  if (numYears <= 0) return 0;
+
+  var g = asBool_(costIsTodaysDollars) ? inflationRate : 0;
+  var r = annualReturn;
+  var n = numYears;
+
+  // End balance (target 0) = currentSavings*(1+r)^n
+  //   + C * sum_{t=0..n-1}(1+r)^(n-t) - sum_{t}cost_t*(1+r)^(n-t)
+  var growthN = Math.pow(1 + r, n);
+
+  // Sum of (1+r)^(n-t) for t=0..n-1  ==  sum_{k=1..n}(1+r)^k
+  var contribFactor;
+  if (!r) {
+    contribFactor = n;
+  } else {
+    contribFactor = (1 + r) * (growthN - 1) / r;
+  }
+
+  // Sum of cost_t*(1+r)^(n-t) where cost_t = budget*(1+g)^t
+  var x = (1 + g) / (1 + r);
+  var costSumGeom;
+  if (Math.abs(x - 1) < 1e-12) {
+    costSumGeom = n;
+  } else {
+    costSumGeom = (1 - Math.pow(x, n)) / (1 - x);
+  }
+  var costFV = annualTripBudget * growthN * costSumGeom;
+
+  var requiredC = (costFV - currentSavings * growthN) / contribFactor;
+  return Math.round(Math.max(0, requiredC));
+}
+
+/**
+ * TRIP_SAVINGS_SCHEDULE
+ *
+ * Year-by-year travel sinking-fund schedule. If annualContribution is omitted
+ * or zero, the level contribution from TRIP_SAVINGS_REQUIRED is used.
+ *
+ * @param {number} annualTripBudget     Cost of one year's trip(s)
+ * @param {boolean} costIsTodaysDollars TRUE to inflate the budget each year
+ * @param {number} numYears             Number of years of trips to fund
+ * @param {number} currentSavings       Money already set aside for trips
+ * @param {number} annualReturn         Expected annual return (decimal)
+ * @param {number} inflationRate        Inflation rate (decimal)
+ * @param {number} annualContribution   Optional: contribution to test instead
+ * @param {number} startYear            Optional: first calendar year
+ *
+ * @return {Array[]} Table: Year, Trip Cost, Contribution, Withdrawal, End Balance
+ * @customfunction
+ *
+ * Example:
+ * =TRIP_SAVINGS_SCHEDULE(8000, TRUE, 20, 5000, 0.05, 0.025)
+ */
+function TRIP_SAVINGS_SCHEDULE(annualTripBudget, costIsTodaysDollars, numYears, currentSavings, annualReturn, inflationRate, annualContribution, startYear) {
+  annualTripBudget   = Number(annualTripBudget);
+  numYears           = Number(numYears);
+  currentSavings     = Number(currentSavings) || 0;
+  annualReturn       = Number(annualReturn);
+  inflationRate      = Number(inflationRate) || 0;
+  annualContribution = Number(annualContribution) || 0;
+  startYear          = Number(startYear) || (new Date()).getFullYear();
+
+  if (numYears <= 0) {
+    return [["ERROR: numYears must be greater than 0"]];
+  }
+
+  if (!annualContribution) {
+    annualContribution = TRIP_SAVINGS_REQUIRED(annualTripBudget, costIsTodaysDollars, numYears, currentSavings, annualReturn, inflationRate);
+  }
+
+  var g = asBool_(costIsTodaysDollars) ? inflationRate : 0;
+  var balance = currentSavings;
+  var table = [['Year', 'Trip Cost', 'Contribution', 'Withdrawal', 'End Balance']];
+
+  for (var t = 0; t < numYears; t++) {
+    var tripCost = annualTripBudget * Math.pow(1 + g, t);
+    // Start of year: add contribution, take the trip, then grow the remainder.
+    balance += annualContribution;
+    var withdrawal = Math.min(tripCost, balance);
+    balance -= withdrawal;
+    balance = balance * (1 + annualReturn);
+
+    table.push([
+      startYear + t,
+      Math.round(tripCost),
+      Math.round(annualContribution),
+      Math.round(withdrawal),
+      Math.round(balance)
+    ]);
+  }
+
+  return table;
+}
+
+/**
+ * CAR_SINKING_FUND
+ *
+ * Annual and monthly amount to save now to fund the next vehicle purchase,
+ * net of any trade-in and money already set aside. Mirrors the spreadsheet's
+ * one-off "new car" goal but adds a trade-in offset and a monthly figure.
+ *
+ * @param {number} yearsUntilReplacement Years until you buy the next vehicle
+ * @param {number} replacementCost       Cost of the next vehicle
+ * @param {boolean} costIsTodaysDollars  TRUE if cost/trade-in are in today's $
+ * @param {number} currentSavings        Money already earmarked
+ * @param {number} annualReturn          Expected annual return (decimal)
+ * @param {number} inflationRate         Inflation rate (decimal)
+ * @param {number} tradeInValue          Optional: today's-$ trade-in/resale of current car
+ *
+ * @return {Array[]} Two-column summary table
+ * @customfunction
+ *
+ * Example:
+ * =CAR_SINKING_FUND(5, 40000, TRUE, 5000, 0.04, 0.025, 8000)
+ */
+function CAR_SINKING_FUND(yearsUntilReplacement, replacementCost, costIsTodaysDollars, currentSavings, annualReturn, inflationRate, tradeInValue) {
+  yearsUntilReplacement = Number(yearsUntilReplacement);
+  replacementCost       = Number(replacementCost);
+  currentSavings        = Number(currentSavings) || 0;
+  annualReturn          = Number(annualReturn);
+  inflationRate         = Number(inflationRate) || 0;
+  tradeInValue          = Number(tradeInValue) || 0;
+
+  var inflate = asBool_(costIsTodaysDollars);
+  var n = Math.max(0, yearsUntilReplacement);
+  var grossCost = inflate ? replacementCost * Math.pow(1 + inflationRate, n) : replacementCost;
+  var tradeIn = inflate ? tradeInValue * Math.pow(1 + inflationRate, n) : tradeInValue;
+  var netCost = Math.max(0, grossCost - tradeIn);
+
+  var fvCurrent = currentSavings * Math.pow(1 + annualReturn, n);
+  var gap = Math.max(0, netCost - fvCurrent);
+
+  var annual = (n <= 0) ? gap : pmtAnnuityDue_(annualReturn, n, gap);
+
+  return [
+    ['Car Replacement Sinking Fund', ''],
+    ['Years until replacement', n],
+    ['Projected replacement cost', Math.round(grossCost)],
+    ['Projected trade-in / resale', Math.round(tradeIn)],
+    ['Net amount to fund', Math.round(netCost)],
+    ['Future value of current savings', Math.round(fvCurrent)],
+    ['Funding gap', Math.round(gap)],
+    ['Required annual contribution', Math.round(annual)],
+    ['≈ Required monthly contribution', Math.round(annual / 12)]
+  ];
+}
+
+/**
+ * CAR_REPLACEMENT_SCHEDULE
+ *
+ * Projects when a vehicle will need replacing and the inflated cost at each
+ * replacement over a planning horizon, assuming you replace on a fixed cycle.
+ *
+ * @param {number} currentVehicleAge      Current age of your vehicle (years)
+ * @param {number} replacementIntervalYrs Years you keep a vehicle before replacing
+ * @param {number} replacementCost        Cost of a replacement vehicle
+ * @param {boolean} costIsTodaysDollars   TRUE if costs are in today's $
+ * @param {number} inflationRate          Inflation rate (decimal)
+ * @param {number} planningYears          How many years ahead to plan
+ * @param {number} tradeInValue           Optional: today's-$ trade-in at each replacement
+ *
+ * @return {Array[]} Table: Replacement #, Years From Now, Replaced At Age,
+ *                    Projected Cost, Projected Trade-In, Net Outlay
+ * @customfunction
+ *
+ * Example:
+ * =CAR_REPLACEMENT_SCHEDULE(3, 10, 40000, TRUE, 0.025, 30, 8000)
+ */
+function CAR_REPLACEMENT_SCHEDULE(currentVehicleAge, replacementIntervalYrs, replacementCost, costIsTodaysDollars, inflationRate, planningYears, tradeInValue) {
+  currentVehicleAge     = Number(currentVehicleAge) || 0;
+  replacementIntervalYrs = Number(replacementIntervalYrs);
+  replacementCost       = Number(replacementCost);
+  inflationRate         = Number(inflationRate) || 0;
+  planningYears         = Number(planningYears);
+  tradeInValue          = Number(tradeInValue) || 0;
+
+  if (replacementIntervalYrs <= 0) {
+    return [["ERROR: replacementIntervalYrs must be greater than 0"]];
+  }
+
+  var inflate = asBool_(costIsTodaysDollars);
+  var table = [['Replacement #', 'Years From Now', 'Replaced At Vehicle Age', 'Projected Cost', 'Projected Trade-In', 'Net Outlay']];
+
+  // First replacement happens when the current vehicle reaches the interval.
+  var yearsToNext = Math.max(0, replacementIntervalYrs - currentVehicleAge);
+  var count = 0;
+
+  for (var y = yearsToNext; y <= planningYears; y += replacementIntervalYrs) {
+    count++;
+    var grossCost = inflate ? replacementCost * Math.pow(1 + inflationRate, y) : replacementCost;
+    var tradeIn = inflate ? tradeInValue * Math.pow(1 + inflationRate, y) : tradeInValue;
+    table.push([
+      count,
+      y,
+      replacementIntervalYrs,
+      Math.round(grossCost),
+      Math.round(tradeIn),
+      Math.round(Math.max(0, grossCost - tradeIn))
+    ]);
+  }
+
+  if (count === 0) {
+    table.push(['—', 'None within horizon', '', '', '', '']);
+  }
+
+  return table;
+}
+
+/**
+ * CAR_TOTAL_COST_OF_OWNERSHIP
+ *
+ * Estimates the total and annualized cost of owning a vehicle over a holding
+ * period, including the purchase price, recurring running costs (maintenance,
+ * insurance, fuel/other), and the resale value recovered at the end.
+ *
+ * @param {number} purchasePrice    Up-front purchase price
+ * @param {number} annualMaintenance Annual maintenance/repairs (today's $)
+ * @param {number} annualInsurance  Annual insurance (today's $)
+ * @param {number} annualFuelOther  Annual fuel + other running costs (today's $)
+ * @param {number} ownershipYears   Years you will own the vehicle
+ * @param {number} resaleValue      Expected resale value at end (today's $)
+ * @param {number} inflationRate    Inflation rate for running costs (decimal)
+ *
+ * @return {Array[]} Two-column summary table
+ * @customfunction
+ *
+ * Example:
+ * =CAR_TOTAL_COST_OF_OWNERSHIP(40000, 1200, 1600, 2400, 10, 8000, 0.025)
+ */
+function CAR_TOTAL_COST_OF_OWNERSHIP(purchasePrice, annualMaintenance, annualInsurance, annualFuelOther, ownershipYears, resaleValue, inflationRate) {
+  purchasePrice     = Number(purchasePrice) || 0;
+  annualMaintenance = Number(annualMaintenance) || 0;
+  annualInsurance   = Number(annualInsurance) || 0;
+  annualFuelOther   = Number(annualFuelOther) || 0;
+  ownershipYears    = Number(ownershipYears);
+  resaleValue       = Number(resaleValue) || 0;
+  inflationRate     = Number(inflationRate) || 0;
+
+  if (ownershipYears <= 0) {
+    return [["ERROR: ownershipYears must be greater than 0"]];
+  }
+
+  var baseAnnual = annualMaintenance + annualInsurance + annualFuelOther;
+  var totalMaintenance = 0, totalInsurance = 0, totalFuel = 0;
+
+  for (var t = 0; t < ownershipYears; t++) {
+    var f = Math.pow(1 + inflationRate, t);
+    totalMaintenance += annualMaintenance * f;
+    totalInsurance   += annualInsurance * f;
+    totalFuel        += annualFuelOther * f;
+  }
+
+  var totalRunning = totalMaintenance + totalInsurance + totalFuel;
+  var depreciation = Math.max(0, purchasePrice - resaleValue);
+  var totalCost = depreciation + totalRunning;
+  var annualized = totalCost / ownershipYears;
+
+  return [
+    ['Total Cost of Ownership', ''],
+    ['Holding period (years)', ownershipYears],
+    ['Purchase price', Math.round(purchasePrice)],
+    ['Resale value at end', Math.round(resaleValue)],
+    ['Depreciation (price − resale)', Math.round(depreciation)],
+    ['Total maintenance', Math.round(totalMaintenance)],
+    ['Total insurance', Math.round(totalInsurance)],
+    ['Total fuel & other', Math.round(totalFuel)],
+    ['Total running costs', Math.round(totalRunning)],
+    ['TOTAL cost of ownership', Math.round(totalCost)],
+    ['Annualized cost', Math.round(annualized)],
+    ['≈ Monthly cost', Math.round(annualized / 12)]
+  ];
+}
+
+
+/**
+ * ----------------------------------------------------------------------
+ * SECTION 34 – Couple / household projection
+ * ----------------------------------------------------------------------
+ *
+ * Extends the single-scenario projection flow to two people. Each spouse keeps
+ * their own ages, balances, contributions, employment income, CPP/OAS, and DB
+ * pension; tax is computed PER PERSON (the main reason couples plan together —
+ * income split across two sets of brackets), and a combined household target
+ * net income is met by drawing first from the lower-income spouse's portfolio.
+ *
+ * Person 2's inputs use the same named ranges as person 1 with a "_2" suffix
+ * (e.g. current_age_2, rrsp_balance_now_2). Any missing person-2 range falls
+ * back to a sensible default, so a couple only needs to fill in what differs.
+ *
+ * Results are written to a "Calcs_Couple" sheet (created if absent), with a
+ * per-person summary block at the top and a combined year-by-year table below.
+ */
+
+/**
+ * runCoupleProjection
+ *
+ * Menu entry point. Reads both spouses' inputs, computes CPP/OAS for each, and
+ * writes a combined household projection to the Calcs_Couple sheet.
+ */
+function runCoupleProjection() {
+  try {
+    SpreadsheetApp.getActive().toast('Starting couple projection...', 'Retirement Calculator', 3);
+
+    var p1 = readPersonInputs_('');
+    var p2 = readPersonInputs_('_2');
+    var household = readHouseholdInputs_(p1);
+
+    var cpp1 = computeCppBenefit_(p1, readCppContribs_());
+    var oas1 = computeOasBenefit_(p1);
+    var cpp2 = computeCppBenefit_(p2, readCppContribsForSuffix_('_2'));
+    var oas2 = computeOasBenefit_(p2);
+
+    runCoupleProjectionTable_(p1, p2, household, cpp1, oas1, cpp2, oas2);
+
+    SpreadsheetApp.getActive().toast('Couple projection complete! Check the Calcs_Couple sheet.', 'Retirement Calculator', 5);
+  } catch (e) {
+    SpreadsheetApp.getUi().alert('Error running couple projection: ' + e.message);
+    throw e;
+  }
+}
+
+/**
+ * readPersonInputs_
+ *
+ * Reads one person's inputs from named ranges. The suffix is '' for person 1
+ * and '_2' for person 2. Shared/household-level ranges (current_year,
+ * inflation_rate, real_return, target_net_income_today, province) are read from
+ * the unsuffixed names for both people.
+ * @private
+ */
+function readPersonInputs_(suffix) {
+  var ss = SpreadsheetApp.getActive();
+
+  function req(name) {
+    var range = ss.getRangeByName(name);
+    if (!range) {
+      throw new Error('Named range "' + name + '" not found. Please add it to the Inputs sheet.');
+    }
+    return range.getValue();
+  }
+  function opt(name, fallback) {
+    var range = ss.getRangeByName(name);
+    if (!range) return fallback;
+    var v = range.getValue();
+    if (v === '' || v === null) return fallback;
+    return v;
+  }
+
+  // Shared household-level ranges (always unsuffixed).
+  var currentYear = Number(req('current_year'));
+  var inflation = Number(req('inflation_rate')) / 100;
+  var realReturn = Number(req('real_return')) / 100;
+
+  // Person-level ranges. For person 1 (suffix '') these are required; for
+  // person 2 they are optional and fall back to person-1-style defaults so a
+  // couple only fills in what differs.
+  function person(name, fallback) {
+    if (suffix === '') return Number(req(name));
+    return Number(opt(name + suffix, fallback));
+  }
+  function personStr(name, fallback) {
+    if (suffix === '') return String(req(name));
+    return String(opt(name + suffix, fallback));
+  }
+
+  var p = {
+    label: suffix === '' ? 'Person 1' : 'Person 2',
+    suffix: suffix,
+    currentYear: currentYear,
+    inflation: inflation,
+    realReturn: realReturn,
+    currentAge: person('current_age', 0),
+    retirementAge: person('retirement_age', 65),
+    lifeExpectancyAge: person('life_expectancy_age', 95),
+    cppStartAge: person('cpp_start_age', 65),
+    oasStartAge: person('oas_start_age', 65),
+    currentIncome: person('current_income', 0),
+    annualContrib: person('annual_contrib', 0),
+    rrspBalanceNow: person('rrsp_balance_now', 0),
+    tfsaBalanceNow: person('tfsa_balance_now', 0),
+    taxableBalanceNow: person('taxable_balance_now', 0),
+    province: personStr('province', 'ON'),
+    dbPensionAnnualToday: person('db_pension_annual_today', 0),
+    dbPensionStartAge: person('db_pension_start_age', 65)
+  };
+  p.totalBalanceNow = p.rrspBalanceNow + p.tfsaBalanceNow + p.taxableBalanceNow;
+  p.applyOasClawback = asBool_(opt('apply_oas_clawback', true));
+  return p;
+}
+
+/**
+ * readHouseholdInputs_
+ *
+ * Household-level settings shared by both spouses.
+ * @private
+ */
+function readHouseholdInputs_(p1) {
+  var ss = SpreadsheetApp.getActive();
+  function opt(name, fallback) {
+    var range = ss.getRangeByName(name);
+    if (!range) return fallback;
+    var v = range.getValue();
+    if (v === '' || v === null) return fallback;
+    return v;
+  }
+  function req(name) {
+    var range = ss.getRangeByName(name);
+    if (!range) throw new Error('Named range "' + name + '" not found.');
+    return range.getValue();
+  }
+
+  return {
+    currentYear: p1.currentYear,
+    inflation: p1.inflation,
+    realReturn: p1.realReturn,
+    // Combined after-tax spending target for the whole household (today's $).
+    targetNetIncomeToday: Number(req('target_net_income_today'))
+  };
+}
+
+/**
+ * readCppContribsForSuffix_
+ *
+ * Reads CPP contribution history for person 2 from cpp_contribs_range_2 if it
+ * exists, otherwise returns an empty history.
+ * @private
+ */
+function readCppContribsForSuffix_(suffix) {
+  var ss = SpreadsheetApp.getActive();
+  var range = ss.getRangeByName('cpp_contribs_range' + suffix);
+  if (!range) return [];
+  var values = range.getValues();
+  var result = [];
+  for (var i = 0; i < values.length; i++) {
+    var row = values[i];
+    if (!row[0] || row[0] === '' || row[0] === 0) continue;
+    result.push({
+      year: Number(row[0]),
+      age: Number(row[1]),
+      earnings: Number(row[2]),
+      ympe: Number(row[3]),
+      ratio: Number(row[4])
+    });
+  }
+  return result;
+}
+
+/**
+ * personYearIncome_
+ *
+ * Computes one person's non-portfolio income for a given calendar year/age,
+ * applying OAS clawback. Returns the taxable and total (incl. non-taxable)
+ * components needed downstream.
+ * @private
+ */
+function personYearIncome_(p, cppRes, oasRes, year) {
+  var age = p.currentAge + (year - p.currentYear);
+
+  var employment = 0;
+  if (age < p.retirementAge) {
+    employment = inflateToYear_(p.currentIncome, p.currentYear, year, p.inflation);
+  }
+
+  var cpp = 0;
+  if (age >= cppRes.startAge) {
+    cpp = inflateToYear_(cppRes.annualAtStartToday, p.currentYear, year, p.inflation);
+  }
+
+  var oas = 0;
+  if (age >= oasRes.startAge) {
+    oas = inflateToYear_(oasRes.annualAtStartToday, p.currentYear, year, p.inflation);
+  }
+
+  var db = 0;
+  if (p.dbPensionAnnualToday > 0 && age >= p.dbPensionStartAge) {
+    db = inflateToYear_(p.dbPensionAnnualToday, p.currentYear, year, p.inflation);
+  }
+
+  // OAS clawback on this person's own income.
+  var oasClawback = 0;
+  if (p.applyOasClawback && oas > 0) {
+    var threshold = inflateToYear_(OAS_2024.CLAWBACK_THRESHOLD, p.currentYear, year, p.inflation);
+    var incomeForClawback = employment + cpp + oas + db;
+    if (incomeForClawback > threshold) {
+      oasClawback = Math.min((incomeForClawback - threshold) * OAS_2024.CLAWBACK_RATE, oas);
+      oas -= oasClawback;
+    }
+  }
+
+  var taxable = employment + cpp + oas + db; // all taxable streams here
+  return {
+    age: age,
+    employment: employment,
+    cpp: cpp,
+    oas: oas,
+    db: db,
+    taxableIncome: taxable
+  };
+}
+
+/**
+ * drawFromPerson_
+ *
+ * Given a person's other taxable income, the net amount still needed from their
+ * portfolio, and their available balance, returns the gross withdrawal (grossed
+ * up for tax) and the actual net delivered, capped by the balance.
+ * @private
+ */
+function drawFromPerson_(otherTaxableIncome, netNeeded, balance, currentYear, inflation, year) {
+  if (netNeeded <= 0 || balance <= 0) {
+    return { gross: 0, net: 0 };
+  }
+  var pseudoInputs = { currentYear: currentYear, inflation: inflation };
+  var marginalRate = computeMarginalRate_(otherTaxableIncome, pseudoInputs, year);
+  var grossNeeded = netNeeded / (1 - marginalRate);
+  var gross = Math.min(grossNeeded, balance);
+
+  // Net actually delivered, taxing the incremental withdrawal at the bracket(s).
+  var taxBefore = computeTax_(otherTaxableIncome, pseudoInputs, year);
+  var taxAfter = computeTax_(otherTaxableIncome + gross, pseudoInputs, year);
+  var net = gross - (taxAfter - taxBefore);
+  return { gross: gross, net: net };
+}
+
+/**
+ * runCoupleProjectionTable_
+ *
+ * Builds the combined household projection and writes it to Calcs_Couple.
+ * @private
+ */
+function runCoupleProjectionTable_(p1, p2, household, cpp1, oas1, cpp2, oas2) {
+  var ss = SpreadsheetApp.getActive();
+  var sheet = ss.getSheetByName('Calcs_Couple');
+  if (!sheet) {
+    sheet = ss.insertSheet('Calcs_Couple');
+  }
+  sheet.clear();
+
+  // --- Summary block ---
+  var summary = [
+    ['Couple / Household Projection', '', ''],
+    ['', 'Person 1', 'Person 2'],
+    ['Current age', p1.currentAge, p2.currentAge],
+    ['Retirement age', p1.retirementAge, p2.retirementAge],
+    ['CPP start age', p1.cppStartAge, p2.cppStartAge],
+    ['OAS start age', p1.oasStartAge, p2.oasStartAge],
+    ['CPP (today\'s $/yr)', Math.round(cpp1.annualAtStartToday), Math.round(cpp2.annualAtStartToday)],
+    ['OAS (today\'s $/yr)', Math.round(oas1.annualAtStartToday), Math.round(oas2.annualAtStartToday)],
+    ['DB pension (today\'s $/yr)', Math.round(p1.dbPensionAnnualToday), Math.round(p2.dbPensionAnnualToday)],
+    ['Portfolio now', Math.round(p1.totalBalanceNow), Math.round(p2.totalBalanceNow)],
+    ['Household target net income (today\'s $)', Math.round(household.targetNetIncomeToday), '']
+  ];
+  sheet.getRange(1, 1, summary.length, 3).setValues(summary);
+  sheet.getRange(1, 1, 1, 3).setFontWeight('bold');
+  sheet.getRange(2, 1, 1, 3).setFontWeight('bold');
+
+  // --- Year-by-year table ---
+  var headerRow = summary.length + 2;
+  var headers = [
+    'Year', 'Age P1', 'Age P2',
+    'Employment', 'CPP', 'OAS', 'DB Pension',
+    'Gross Income', 'Withdrawals', 'Taxes', 'Net Income',
+    'Target Net', 'End Balance P1', 'End Balance P2', 'Net Income (today\'s $)'
+  ];
+  sheet.getRange(headerRow, 1, 1, headers.length).setValues([headers]);
+  sheet.getRange(headerRow, 1, 1, headers.length).setFontWeight('bold');
+
+  var bal1 = p1.totalBalanceNow;
+  var bal2 = p2.totalBalanceNow;
+
+  // Project until the later of the two life expectancies.
+  var endYear = Math.max(
+    p1.currentYear + (p1.lifeExpectancyAge - p1.currentAge),
+    p2.currentYear + (p2.lifeExpectancyAge - p2.currentAge)
+  );
+
+  var rows = [];
+  for (var year = household.currentYear; year <= endYear; year++) {
+    var i1 = personYearIncome_(p1, cpp1, oas1, year);
+    var i2 = personYearIncome_(p2, cpp2, oas2, year);
+
+    var bothRetired = (i1.age >= p1.retirementAge) && (i2.age >= p2.retirementAge);
+    var anyRetired = (i1.age >= p1.retirementAge) || (i2.age >= p2.retirementAge);
+
+    // Contributions while each is still working.
+    var contrib1 = (i1.age < p1.retirementAge) ? inflateToYear_(p1.annualContrib, p1.currentYear, year, p1.inflation) : 0;
+    var contrib2 = (i2.age < p2.retirementAge) ? inflateToYear_(p2.annualContrib, p2.currentYear, year, p2.inflation) : 0;
+    bal1 += contrib1;
+    bal2 += contrib2;
+
+    // Baseline (pre-withdrawal) taxes and net income, per person.
+    var tax1 = computeTax_(i1.taxableIncome, { currentYear: household.currentYear, inflation: household.inflation }, year);
+    var tax2 = computeTax_(i2.taxableIncome, { currentYear: household.currentYear, inflation: household.inflation }, year);
+    var netBefore = (i1.taxableIncome - tax1) + (i2.taxableIncome - tax2);
+
+    var targetNet = inflateToYear_(household.targetNetIncomeToday, household.currentYear, year, household.inflation);
+
+    var withdrawals = 0;
+    var addedTax1 = 0, addedTax2 = 0;
+    var gap = targetNet - netBefore;
+
+    if (anyRetired && gap > 0) {
+      // Draw from the lower-taxable-income spouse first (stays in lower brackets).
+      var first = (i1.taxableIncome <= i2.taxableIncome)
+        ? { p: p1, inc: i1, getBal: function () { return bal1; }, setBal: function (v) { bal1 = v; }, addTax: function (t) { addedTax1 += t; } }
+        : { p: p2, inc: i2, getBal: function () { return bal2; }, setBal: function (v) { bal2 = v; }, addTax: function (t) { addedTax2 += t; } };
+      var second = (first.p === p1)
+        ? { p: p2, inc: i2, getBal: function () { return bal2; }, setBal: function (v) { bal2 = v; }, addTax: function (t) { addedTax2 += t; } }
+        : { p: p1, inc: i1, getBal: function () { return bal1; }, setBal: function (v) { bal1 = v; }, addTax: function (t) { addedTax1 += t; } };
+
+      var d1 = drawFromPerson_(first.inc.taxableIncome, gap, first.getBal(), household.currentYear, household.inflation, year);
+      first.setBal(first.getBal() - d1.gross);
+      first.addTax(computeTax_(first.inc.taxableIncome + d1.gross, { currentYear: household.currentYear, inflation: household.inflation }, year) - computeTax_(first.inc.taxableIncome, { currentYear: household.currentYear, inflation: household.inflation }, year));
+      withdrawals += d1.gross;
+      gap -= d1.net;
+
+      if (gap > 0) {
+        var d2 = drawFromPerson_(second.inc.taxableIncome, gap, second.getBal(), household.currentYear, household.inflation, year);
+        second.setBal(second.getBal() - d2.gross);
+        second.addTax(computeTax_(second.inc.taxableIncome + d2.gross, { currentYear: household.currentYear, inflation: household.inflation }, year) - computeTax_(second.inc.taxableIncome, { currentYear: household.currentYear, inflation: household.inflation }, year));
+        withdrawals += d2.gross;
+        gap -= d2.net;
+      }
+    }
+
+    var totalTax = tax1 + tax2 + addedTax1 + addedTax2;
+    var grossIncome = i1.taxableIncome + i2.taxableIncome + withdrawals;
+    var netIncome = grossIncome - totalTax;
+
+    // Grow remaining balances for the year.
+    bal1 = Math.max(0, bal1 * (1 + p1.realReturn));
+    bal2 = Math.max(0, bal2 * (1 + p2.realReturn));
+
+    var netToday = discountToYearZero_(netIncome, household.currentYear, year, household.inflation);
+
+    rows.push([
+      year, i1.age, i2.age,
+      Math.round(i1.employment + i2.employment),
+      Math.round(i1.cpp + i2.cpp),
+      Math.round(i1.oas + i2.oas),
+      Math.round(i1.db + i2.db),
+      Math.round(grossIncome),
+      Math.round(withdrawals),
+      Math.round(totalTax),
+      Math.round(netIncome),
+      Math.round(targetNet),
+      Math.round(bal1),
+      Math.round(bal2),
+      Math.round(netToday)
+    ]);
+  }
+
+  if (rows.length > 0) {
+    sheet.getRange(headerRow + 1, 1, rows.length, headers.length).setValues(rows);
+  }
 }
