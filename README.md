@@ -15,6 +15,7 @@ This project provides a Google Apps Script file (`code.gs`) that plugs into a Go
 - **RESP / CESG education planner** — year-by-year schedule with grant and lifetime caps
 - **Lifestyle goals** — recurring yearly **trip savings** and full **vehicle planning** (sinking fund, replacement schedule, total cost of ownership)
 - **Big-purchase goals** — a one-click **GOALS sheet** (down payment, renovation, wedding, boat/RV, home systems, lifetime vehicle) that solves the required monthly/annual savings for each
+- **HELOC & Smith Manoeuvre** calculator — converts a mortgage into a tax-deductible investment loan, year by year
 - **Tax estimation** for all 13 provinces and territories (2024 brackets)
 - And many more retirement planning functions...
 
@@ -57,6 +58,7 @@ This project provides a Google Apps Script file (`code.gs`) that plugs into a Go
 33. [FHSA Contribution Room](#33-fhsa-contribution-room)
 34. [Lifestyle Goals — Trip Savings & Vehicle Planning](#34-lifestyle-goals--trip-savings--vehicle-planning)
 35. [Big-Purchase Goals & the GOALS Sheet](#35-big-purchase-goals--the-goals-sheet)
+36. [HELOC & Smith Manoeuvre](#36-heloc--smith-manoeuvre)
 
 ---
 
@@ -567,6 +569,14 @@ Comprehensive income breakdown at a specific age.
 | `RECURRING_EXPENSE_FUND` | Recurring big expense (roof, HVAC, appliances) | Exact math |
 | `HOME_MAINTENANCE_RESERVE` | Reserve as % of home value | Exact math |
 
+#### HELOC & Smith Manoeuvre
+| Function | Purpose | Accuracy |
+|----------|---------|----------|
+| `HELOC_AVAILABLE_CREDIT` | Room under Canadian 65%/80% LTV limits | Exact (CRA/OSFI limits) |
+| `HELOC_INTEREST_ONLY_PAYMENT` | Monthly interest-only HELOC payment | Exact math |
+| `SMITH_MANOEUVRE_SCHEDULE` | Year-by-year mortgage→deductible-loan conversion | Exact math |
+| `SMITH_MANOEUVRE_SUMMARY` | Headline results & years saved | Exact math |
+
 #### Non-Registered Accounts
 | Function | Purpose | Accuracy |
 |----------|---------|----------|
@@ -965,6 +975,34 @@ For everything else — **home down payment, renovation, wedding, boat/RV, major
 =RECURRING_EXPENSE_FUND(15000, TRUE, 25, 40, 20, 0, 0.04, 0.025)  # roof every 25 yrs
 =HOME_MAINTENANCE_RESERVE(600000, 0.02, 20, 0, 0.04, 0.025)    # 2%/yr reserve
 ```
+
+---
+
+## 36. HELOC & Smith Manoeuvre
+
+The **Smith Manoeuvre** is a Canadian strategy that gradually turns a non-deductible mortgage into a **tax-deductible investment loan** using a readvanceable mortgage + HELOC. Each month the principal you pay down frees an equal amount of HELOC credit, which you re-borrow and invest; the HELOC interest is deductible, and the tax refund can be applied back to the mortgage to accelerate it.
+
+### Functions
+
+| Function | Purpose |
+|----------|---------|
+| `HELOC_AVAILABLE_CREDIT(homeValue, mortgageBalance, existingHeloc)` | Available HELOC room under the **65%** standalone / **80%** combined LTV limits |
+| `HELOC_INTEREST_ONLY_PAYMENT(balance, annualRate)` | Monthly interest-only (minimum) HELOC payment |
+| `SMITH_MANOEUVRE_SCHEDULE(mortgageBalance, mortgageRate, amortizationYears, helocRate, investmentReturn, marginalTaxRate, applyRefundToMortgage, projectionYears)` | Year-by-year: mortgage, HELOC, total debt, investments, deductible interest, tax refund, net equity |
+| `SMITH_MANOEUVRE_SUMMARY(...)` | Payoff time, years saved, final portfolio/HELOC, net equity, total refunds |
+
+```
+=SMITH_MANOEUVRE_SUMMARY(400000, 0.05, 25, 0.065, 0.06, 0.40, TRUE, 25)
+```
+
+### Modelling assumptions
+
+- Fixed mortgage rate uses **Canadian semi-annual compounding** (converted to monthly); HELOC and returns compound monthly.
+- The HELOC interest is **capitalized** (the "self-funding" / no-out-of-pocket variant).
+- The tax refund on deductible interest is computed yearly and, when `applyRefundToMortgage` is TRUE, applied to the mortgage (which frees more credit to re-borrow and invest — the "accelerator").
+- **Net equity = Investments − HELOC.** It turns positive only when your return comfortably exceeds the HELOC rate, so the result is highly sensitive to that spread.
+
+> ⚠️ The Smith Manoeuvre is a **leveraged investment strategy** — it amplifies both gains and losses and carries interest-rate, investment, and tax risk. This calculator is educational only and is **not** financial, tax, or investment advice. Confirm deductibility rules with the CRA and a qualified advisor.
 
 ---
 

@@ -5702,3 +5702,277 @@ function runLifestyleGoals() {
     throw e;
   }
 }
+
+/**
+ * ----------------------------------------------------------------------
+ * SECTION 38 – HELOC & Smith Manoeuvre calculator
+ * ----------------------------------------------------------------------
+ *
+ * The Smith Manoeuvre is a Canadian strategy that gradually converts a
+ * non-deductible mortgage into a tax-deductible investment loan using a
+ * readvanceable mortgage (mortgage + HELOC). Each month the principal you pay
+ * down frees an equal amount of HELOC credit, which you re-borrow and invest;
+ * the HELOC interest is tax-deductible (investment purpose), and the resulting
+ * tax refund can be applied back to the mortgage to accelerate it.
+ *
+ * Modelling choices (documented):
+ *  - Fixed mortgage rate uses Canadian semi-annual compounding (converted to a
+ *    monthly rate); HELOC and returns use monthly compounding.
+ *  - HELOC interest is capitalized (the "self-funding" version — no out-of-pocket).
+ *  - Tax refund on deductible interest is computed yearly and, if the accelerator
+ *    is on, applied to the mortgage (which frees more credit to re-borrow/invest).
+ *  - Leverage cuts both ways: this is an educational projection, not advice.
+ */
+
+/**
+ * HELOC_AVAILABLE_CREDIT
+ *
+ * Estimates available HELOC room under Canadian limits: a HELOC portion is
+ * capped at 65% of home value, and the HELOC + mortgage combined cannot exceed
+ * 80% of home value.
+ *
+ * @param {number} homeValue       Current home value
+ * @param {number} mortgageBalance Outstanding mortgage balance
+ * @param {number} existingHeloc   HELOC already drawn (optional)
+ *
+ * @return {number} Estimated available HELOC credit
+ * @customfunction
+ *
+ * Example:
+ * =HELOC_AVAILABLE_CREDIT(800000, 400000, 0)
+ */
+function HELOC_AVAILABLE_CREDIT(homeValue, mortgageBalance, existingHeloc) {
+  homeValue       = Number(homeValue);
+  mortgageBalance = Number(mortgageBalance) || 0;
+  existingHeloc   = Number(existingHeloc) || 0;
+
+  var helocCap = homeValue * 0.65;                       // standalone HELOC limit
+  var combinedCap = homeValue * 0.80 - mortgageBalance;  // combined LTV limit
+  var available = Math.min(helocCap, combinedCap) - existingHeloc;
+
+  return Math.round(Math.max(0, available) * 100) / 100;
+}
+
+/**
+ * HELOC_INTEREST_ONLY_PAYMENT
+ *
+ * Monthly interest-only payment on a HELOC balance (the typical minimum).
+ *
+ * @param {number} balance    HELOC balance
+ * @param {number} annualRate Annual interest rate (decimal)
+ *
+ * @return {number} Monthly interest-only payment
+ * @customfunction
+ *
+ * Example:
+ * =HELOC_INTEREST_ONLY_PAYMENT(100000, 0.065)
+ */
+function HELOC_INTEREST_ONLY_PAYMENT(balance, annualRate) {
+  balance    = Number(balance) || 0;
+  annualRate = Number(annualRate) || 0;
+  return Math.round(balance * (annualRate / 12) * 100) / 100;
+}
+
+/**
+ * smithManoeuvreSim_
+ *
+ * Month-by-month engine shared by the Smith Manoeuvre custom functions.
+ * @private
+ */
+function smithManoeuvreSim_(o) {
+  var mortgageBalance = Number(o.mortgageBalance);
+  var amortMonths = Math.round(Number(o.amortizationYears) * 12);
+  var months = Math.round(Number(o.projectionYears) * 12);
+  var tax = Number(o.marginalTaxRate) || 0;
+
+  // Rate conversions: fixed mortgage compounds semi-annually in Canada.
+  var rM = Math.pow(1 + Number(o.mortgageRate) / 2, 1 / 6) - 1;
+  var rH = Number(o.helocRate) / 12;
+  var rInv = Math.pow(1 + Number(o.investmentReturn), 1 / 12) - 1;
+
+  // Fixed monthly mortgage payment over the original amortization.
+  var payment = (rM === 0)
+    ? mortgageBalance / amortMonths
+    : mortgageBalance * rM / (1 - Math.pow(1 + rM, -amortMonths));
+
+  var helocBalance = Number(o.helocBalanceStart) || 0;
+  var investBalance = Number(o.investBalanceStart) || 0;
+
+  var rows = [];
+  var yearDeductible = 0;
+  var cumDeductible = 0, cumRefund = 0;
+  var payoffMonth = null;
+
+  for (var m = 1; m <= months; m++) {
+    // --- Mortgage payment & re-borrow ---
+    if (mortgageBalance > 0) {
+      var mInt = mortgageBalance * rM;
+      var principal = Math.min(Math.max(0, payment - mInt), mortgageBalance);
+      mortgageBalance -= principal;
+      helocBalance += principal;   // re-borrow freed credit
+      investBalance += principal;  // …and invest it
+    }
+
+    // --- HELOC interest (capitalized, deductible) ---
+    var hInt = helocBalance * rH;
+    helocBalance += hInt;
+    yearDeductible += hInt;
+
+    // --- Investment growth ---
+    investBalance *= (1 + rInv);
+
+    if (payoffMonth === null && mortgageBalance <= 0.005) {
+      payoffMonth = m;
+      mortgageBalance = 0;
+    }
+
+    // --- Year boundary: tax refund & accelerator ---
+    if (m % 12 === 0) {
+      var refund = yearDeductible * tax;
+      cumDeductible += yearDeductible;
+      cumRefund += refund;
+
+      if (asBool_(o.applyRefundToMortgage) && mortgageBalance > 0 && refund > 0) {
+        var prepay = Math.min(refund, mortgageBalance);
+        mortgageBalance -= prepay;
+        helocBalance += prepay;   // freed credit re-borrowed & invested
+        investBalance += prepay;
+        if (payoffMonth === null && mortgageBalance <= 0.005) {
+          payoffMonth = m;
+          mortgageBalance = 0;
+        }
+      }
+
+      rows.push({
+        year: m / 12,
+        mortgage: mortgageBalance,
+        heloc: helocBalance,
+        totalDebt: mortgageBalance + helocBalance,
+        invest: investBalance,
+        deductible: yearDeductible,
+        refund: refund,
+        netEquity: investBalance - helocBalance
+      });
+      yearDeductible = 0;
+    }
+  }
+
+  return {
+    rows: rows,
+    payoffMonth: payoffMonth,
+    payment: payment,
+    cumDeductible: cumDeductible,
+    cumRefund: cumRefund
+  };
+}
+
+/**
+ * SMITH_MANOEUVRE_SCHEDULE
+ *
+ * Year-by-year Smith Manoeuvre projection: mortgage paydown, HELOC (investment
+ * loan) growth, the investment portfolio, deductible interest, and tax refunds.
+ *
+ * @param {number} mortgageBalance      Current (non-deductible) mortgage balance
+ * @param {number} mortgageRate         Mortgage rate (decimal, e.g. 0.05)
+ * @param {number} amortizationYears    Mortgage amortization (years)
+ * @param {number} helocRate            HELOC rate (decimal, e.g. 0.065)
+ * @param {number} investmentReturn     Expected investment return (decimal)
+ * @param {number} marginalTaxRate      Marginal tax rate for the deduction (decimal)
+ * @param {boolean} applyRefundToMortgage TRUE to apply the tax refund to the mortgage (accelerator)
+ * @param {number} projectionYears      Years to project (optional; defaults to amortizationYears)
+ *
+ * @return {Array[]} Table: Year, Mortgage, HELOC, Total Debt, Investments,
+ *                    Deductible Interest, Tax Refund, Net (Invest − HELOC)
+ * @customfunction
+ *
+ * Example:
+ * =SMITH_MANOEUVRE_SCHEDULE(400000, 0.05, 25, 0.065, 0.06, 0.40, TRUE, 25)
+ */
+function SMITH_MANOEUVRE_SCHEDULE(mortgageBalance, mortgageRate, amortizationYears, helocRate, investmentReturn, marginalTaxRate, applyRefundToMortgage, projectionYears) {
+  if (!Number(projectionYears)) projectionYears = amortizationYears;
+
+  var sim = smithManoeuvreSim_({
+    mortgageBalance: mortgageBalance,
+    mortgageRate: mortgageRate,
+    amortizationYears: amortizationYears,
+    helocRate: helocRate,
+    investmentReturn: investmentReturn,
+    marginalTaxRate: marginalTaxRate,
+    applyRefundToMortgage: applyRefundToMortgage,
+    projectionYears: projectionYears
+  });
+
+  var table = [[
+    'Year', 'Mortgage', 'HELOC (invest. loan)', 'Total Debt', 'Investments',
+    'Deductible Interest', 'Tax Refund', 'Net (Invest − HELOC)'
+  ]];
+  for (var i = 0; i < sim.rows.length; i++) {
+    var r = sim.rows[i];
+    table.push([
+      r.year,
+      Math.round(r.mortgage),
+      Math.round(r.heloc),
+      Math.round(r.totalDebt),
+      Math.round(r.invest),
+      Math.round(r.deductible),
+      Math.round(r.refund),
+      Math.round(r.netEquity)
+    ]);
+  }
+  return table;
+}
+
+/**
+ * SMITH_MANOEUVRE_SUMMARY
+ *
+ * Headline results of a Smith Manoeuvre plan, including how much sooner the
+ * (non-deductible) mortgage is paid off versus a traditional amortization.
+ *
+ * @param {number} mortgageBalance      Current mortgage balance
+ * @param {number} mortgageRate         Mortgage rate (decimal)
+ * @param {number} amortizationYears    Mortgage amortization (years)
+ * @param {number} helocRate            HELOC rate (decimal)
+ * @param {number} investmentReturn     Expected investment return (decimal)
+ * @param {number} marginalTaxRate      Marginal tax rate (decimal)
+ * @param {boolean} applyRefundToMortgage TRUE to apply the tax refund (accelerator)
+ * @param {number} projectionYears      Years to project (optional; defaults to amortizationYears)
+ *
+ * @return {Array[]} Two-column summary table
+ * @customfunction
+ *
+ * Example:
+ * =SMITH_MANOEUVRE_SUMMARY(400000, 0.05, 25, 0.065, 0.06, 0.40, TRUE, 25)
+ */
+function SMITH_MANOEUVRE_SUMMARY(mortgageBalance, mortgageRate, amortizationYears, helocRate, investmentReturn, marginalTaxRate, applyRefundToMortgage, projectionYears) {
+  if (!Number(projectionYears)) projectionYears = amortizationYears;
+
+  var sim = smithManoeuvreSim_({
+    mortgageBalance: mortgageBalance,
+    mortgageRate: mortgageRate,
+    amortizationYears: amortizationYears,
+    helocRate: helocRate,
+    investmentReturn: investmentReturn,
+    marginalTaxRate: marginalTaxRate,
+    applyRefundToMortgage: applyRefundToMortgage,
+    projectionYears: projectionYears
+  });
+
+  var last = sim.rows.length ? sim.rows[sim.rows.length - 1] : null;
+  var payoffYears = sim.payoffMonth ? (sim.payoffMonth / 12) : null;
+  var payoffText = payoffYears ? (Math.round(payoffYears * 10) / 10) : 'Not within horizon';
+  var yearsSaved = payoffYears ? Math.round((Number(amortizationYears) - payoffYears) * 10) / 10 : '—';
+
+  return [
+    ['Smith Manoeuvre Summary', ''],
+    ['Monthly mortgage payment', Math.round(sim.payment)],
+    ['Mortgage paid off in (years)', payoffText],
+    ['Traditional amortization (years)', Number(amortizationYears)],
+    ['Years saved on mortgage', yearsSaved],
+    ['Final investment portfolio', last ? Math.round(last.invest) : 0],
+    ['Final HELOC (investment loan)', last ? Math.round(last.heloc) : 0],
+    ['Net investment equity (Invest − HELOC)', last ? Math.round(last.netEquity) : 0],
+    ['Total deductible interest', Math.round(sim.cumDeductible)],
+    ['Total tax refunds', Math.round(sim.cumRefund)],
+    ['Note', 'Leveraged strategy — investment & rate risk apply. Educational only, not advice.']
+  ];
+}
