@@ -713,6 +713,8 @@ The projection table appears in the **Calcs** sheet starting at **row 50** (head
 5. **OAS Income** - OAS benefits (starts at oas_start_age), **net of any OAS clawback**
 6. **DB Pension** - Defined-benefit pension, read from the `db_pension_annual_today` / `db_pension_start_age` named ranges (derive the amount with `=PENSION_INCOME_PROJECTED(...)`)
 7. **Other Income** - Additional streams (rental, annuity, part-time…) pulled from the **OTHER_INCOME** sheet by age
+
+A **Goal Spending** column is also added: big-purchase goals from the [GOALS sheet](#35-big-purchase-goals--the-goals-sheet) draw down the portfolio in the years they occur, so you can see their drag on retirement funding. (Set `include_goals` to FALSE to turn this off.)
 8. **Gross Income** - Total income before tax
 9. **Taxes** - Estimated income tax
 10. **Net Income** - Income after tax
@@ -800,6 +802,7 @@ This aims to provide consistent purchasing power (target_net_income_today) throu
 - ✅ **DB pension** wired into the DB Pension column via named ranges
 - ✅ **OAS clawback** applied to OAS income
 - ✅ **OTHER_INCOME sheet** folded into the Other Income column
+- ✅ **Big-purchase goals** (GOALS sheet) draw down the projection portfolio (Goal Spending column)
 
 **Future Enhancements:**
 - Integration with existing `ESTIMATE_TAX()` for province-specific brackets in the projection
@@ -838,6 +841,7 @@ These are **optional** — leave them out and the projection behaves exactly as 
 | `db_pension_start_age` | Inputs!B21 | Age the DB pension starts (defaults to retirement age). |
 | `include_other_income` | Inputs!B22 | TRUE/FALSE — fold the OTHER_INCOME sheet into the projection (default TRUE). |
 | `apply_oas_clawback` | Inputs!B23 | TRUE/FALSE — apply the OAS recovery tax (default TRUE). |
+| `include_goals` | Inputs!B24 | TRUE/FALSE — let GOALS-sheet big purchases draw down the projection portfolio (default TRUE). |
 
 > **Avoid double-counting:** CPP, OAS, and the DB pension are modelled directly. Use the **OTHER_INCOME** sheet only for *additional* streams (rental, annuity, part-time work).
 
@@ -945,6 +949,8 @@ For everything else — **home down payment, renovation, wedding, boat/RV, major
 | Inflation | Cost inflation (decimal; default 0.025) |
 
 `Lump sum` → one-time goal · `Recurring` → roof/HVAC/appliances/travel on a cadence · `Vehicle` → lifetime replacements net of trade-in.
+
+> **Fed into the projection:** when you run **Run Projection** or **Run Couple Projection**, these goals are subtracted from the portfolio in the years they occur (shown in the **Goal Spending** column), so you see their drag on retirement funding. Goal spending is modelled as a capital outflow (not taxable income) under the pooled-portfolio model. Set the `include_goals` named range to FALSE to exclude them.
 
 ### Generic functions (use in any cell)
 

@@ -3524,6 +3524,10 @@ function readInputs_() {
   // Whether to apply the OAS recovery tax (clawback) when income is high.
   inputs.applyOasClawback = asBool_(getOptionalNamedValue('apply_oas_clawback', true));
 
+  // Whether big-purchase goals from the GOALS sheet draw down the projection's
+  // portfolio in the years they occur. Defaults to true (no-op if no GOALS sheet).
+  inputs.includeGoals = asBool_(getOptionalNamedValue('include_goals', true));
+
   // Compute derived values
   inputs.totalBalanceNow = inputs.rrspBalanceNow + inputs.tfsaBalanceNow + inputs.taxableBalanceNow;
   
@@ -3763,24 +3767,30 @@ function runProjectionTable_(inputs, cppResult, oasResult) {
   var headers = [
     'Year', 'Age', 'Employment Income', 'CPP Income', 'OAS Income', 'DB Pension', 'Other Income',
     'Gross Income', 'Taxes', 'Net Income', 'Start Balance', 'Contributions', 'Withdrawals',
-    'Investment Return', 'End Balance', 'Net Income (today\'s $)'
+    'Goal Spending', 'Investment Return', 'End Balance', 'Net Income (today\'s $)'
   ];
-  
-  // Clear existing projection table (from row 50 onwards)
+
+  // Clear existing projection table (from row 50 onwards). Clear one extra
+  // column in case an older run wrote a narrower table.
   var lastRow = calcsSheet.getLastRow();
   if (lastRow >= 50) {
-    calcsSheet.getRange(50, 1, lastRow - 49, headers.length).clearContent();
+    calcsSheet.getRange(50, 1, lastRow - 49, headers.length + 1).clearContent();
   }
-  
+
   // Write headers at row 50
   calcsSheet.getRange(50, 1, 1, headers.length).setValues([headers]);
   calcsSheet.getRange(50, 1, 1, headers.length).setFontWeight('bold');
-  
+
   // Build projection rows
   var projectionData = [];
   var portfolioBalance = inputs.totalBalanceNow;
-  
+
   var numYears = inputs.lifeExpectancyAge - inputs.currentAge + 1;
+
+  // Big-purchase goals from the GOALS sheet draw down the same portfolio in the
+  // years they occur (showing their drag on retirement funding). Empty/absent
+  // GOALS sheet => all zeros, so this is a no-op for existing workbooks.
+  var goalOutflows = inputs.includeGoals ? goalOutflowsByYearOffset_(inputs.currentYear, numYears) : [];
   
   for (var i = 0; i < numYears; i++) {
     var year = inputs.currentYear + i;
@@ -3890,17 +3900,20 @@ function runProjectionTable_(inputs, cppResult, oasResult) {
       netIncome = grossIncome - taxes;
     }
     
+    // Big-purchase goal spending for the year (paid from the portfolio).
+    var goalSpending = goalOutflows[i] || 0;
+
     // Portfolio evolution
     var startBalance = portfolioBalance;
     var investmentReturn = portfolioBalance * inputs.realReturn;
-    var endBalance = portfolioBalance + contributions - withdrawals + investmentReturn;
+    var endBalance = portfolioBalance + contributions - withdrawals - goalSpending + investmentReturn;
     endBalance = Math.max(0, endBalance);  // Can't go negative
-    
+
     portfolioBalance = endBalance;
-    
+
     // Net income in today's dollars
     var netIncomeToday = discountToYearZero_(netIncome, inputs.currentYear, year, inputs.inflation);
-    
+
     // Build row
     projectionData.push([
       year,
@@ -3916,6 +3929,7 @@ function runProjectionTable_(inputs, cppResult, oasResult) {
       Math.round(startBalance),
       Math.round(contributions),
       Math.round(withdrawals),
+      Math.round(goalSpending),
       Math.round(investmentReturn),
       Math.round(endBalance),
       Math.round(netIncomeToday)
@@ -4943,7 +4957,7 @@ function runCoupleProjectionTable_(p1, p2, household, cpp1, oas1, cpp2, oas2) {
     'Year', 'Age P1', 'Age P2',
     'Employment', 'CPP', 'OAS', 'DB Pension',
     'Gross Income', 'Withdrawals', 'Taxes', 'Net Income',
-    'Target Net', 'End Balance P1', 'End Balance P2', 'Net Income (today\'s $)'
+    'Target Net', 'Goal Spending', 'End Balance P1', 'End Balance P2', 'Net Income (today\'s $)'
   ];
   sheet.getRange(headerRow, 1, 1, headers.length).setValues([headers]);
   sheet.getRange(headerRow, 1, 1, headers.length).setFontWeight('bold');
@@ -4956,6 +4970,11 @@ function runCoupleProjectionTable_(p1, p2, household, cpp1, oas1, cpp2, oas2) {
     p1.currentYear + (p1.lifeExpectancyAge - p1.currentAge),
     p2.currentYear + (p2.lifeExpectancyAge - p2.currentAge)
   );
+
+  // Household big-purchase goals draw down the combined portfolio (split across
+  // the two spouses in proportion to their balances). No GOALS sheet => no-op.
+  var coupleNumYears = endYear - household.currentYear + 1;
+  var goalOutflows = goalOutflowsByYearOffset_(household.currentYear, coupleNumYears);
 
   var rows = [];
   for (var year = household.currentYear; year <= endYear; year++) {
@@ -5010,6 +5029,17 @@ function runCoupleProjectionTable_(p1, p2, household, cpp1, oas1, cpp2, oas2) {
     var grossIncome = i1.taxableIncome + i2.taxableIncome + withdrawals;
     var netIncome = grossIncome - totalTax;
 
+    // Big-purchase goal spending, split across the two portfolios by balance.
+    var goalSpending = goalOutflows[year - household.currentYear] || 0;
+    if (goalSpending > 0) {
+      var combined = bal1 + bal2;
+      if (combined > 0) {
+        var share1 = goalSpending * (bal1 / combined);
+        bal1 = Math.max(0, bal1 - share1);
+        bal2 = Math.max(0, bal2 - (goalSpending - share1));
+      }
+    }
+
     // Grow remaining balances for the year.
     bal1 = Math.max(0, bal1 * (1 + p1.realReturn));
     bal2 = Math.max(0, bal2 * (1 + p2.realReturn));
@@ -5027,6 +5057,7 @@ function runCoupleProjectionTable_(p1, p2, household, cpp1, oas1, cpp2, oas2) {
       Math.round(totalTax),
       Math.round(netIncome),
       Math.round(targetNet),
+      Math.round(goalSpending),
       Math.round(bal1),
       Math.round(bal2),
       Math.round(netToday)
@@ -5534,6 +5565,71 @@ function ensureGoalsSheet_() {
 function setupGoalsSheet() {
   ensureGoalsSheet_();
   SpreadsheetApp.getActive().toast('GOALS sheet is ready. Enter your goals, then run "Run Lifestyle Goals".');
+}
+
+/**
+ * goalOutflowsByYearOffset_
+ *
+ * Reads the GOALS sheet and returns the total nominal big-purchase spending at
+ * each year offset (0 = this year). Used by the projection so goals draw down
+ * the same portfolio in the years they occur. Returns all-zeros if the GOALS
+ * sheet is absent or empty.
+ *
+ * Note: spending is modelled as a capital outflow (not taxable income) — a
+ * documented simplification of the pooled-portfolio model.
+ *
+ * @param {number} currentYear Projection's base year (offset 0)
+ * @param {number} numYears    Number of year offsets to populate
+ * @return {Array<number>} Nominal goal spending per year offset
+ * @private
+ */
+function goalOutflowsByYearOffset_(currentYear, numYears) {
+  var outflows = [];
+  for (var t = 0; t < numYears; t++) outflows[t] = 0;
+
+  var ss = SpreadsheetApp.getActive();
+  var sheet = ss.getSheetByName('GOALS');
+  if (!sheet) return outflows;
+  var lastRow = sheet.getLastRow();
+  if (lastRow < 2) return outflows;
+
+  var data = sheet.getRange(2, 1, lastRow - 1, 11).getValues();
+  for (var i = 0; i < data.length; i++) {
+    var row = data[i];
+    var name = row[0];
+    var type = String(row[1] || '').toLowerCase().trim();
+    if (!name || !type) continue;
+
+    var cost       = Number(row[2]) || 0;
+    var inflate    = String(row[3] || '').toLowerCase().indexOf('today') >= 0;
+    var yearsUntil = Number(row[4]) || 0;          // also "current vehicle age" for Vehicle
+    var interval   = Number(row[5]) || 1;
+    var horizon    = Number(row[6]) || 30;
+    var tradeIn    = Number(row[9]) || 0;
+    var infl       = (row[10] === '' || row[10] === null) ? 0.025 : Number(row[10]);
+    if (interval <= 0) interval = 1;
+
+    if (type.indexOf('lump') >= 0) {
+      var off = yearsUntil;
+      if (off >= 0 && off < numYears) {
+        outflows[off] += inflate ? cost * Math.pow(1 + infl, off) : cost;
+      }
+    } else if (type.indexOf('vehicle') >= 0 || type.indexOf('car') >= 0) {
+      var yearsToNext = Math.max(0, interval - yearsUntil);
+      for (var y = yearsToNext; y <= horizon && y < numYears; y += interval) {
+        var g = inflate ? cost * Math.pow(1 + infl, y) : cost;
+        var ti = inflate ? tradeIn * Math.pow(1 + infl, y) : tradeIn;
+        outflows[y] += Math.max(0, g - ti);
+      }
+    } else {
+      // recurring / trip / home maintenance
+      for (var y2 = Math.max(0, yearsUntil); y2 <= horizon && y2 < numYears; y2 += interval) {
+        outflows[y2] += inflate ? cost * Math.pow(1 + infl, y2) : cost;
+      }
+    }
+  }
+
+  return outflows;
 }
 
 /**
