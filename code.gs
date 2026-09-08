@@ -744,6 +744,9 @@ function onOpen() {
     .addSeparator()
     .addItem('Setup Goals sheet', 'setupGoalsSheet')
     .addItem('Run Lifestyle Goals', 'runLifestyleGoals')
+    .addSeparator()
+    .addItem('Setup Debts sheet', 'setupDebtsSheet')
+    .addItem('Run Debt Payoff', 'runDebtPayoff')
     .addToUi();
 }
 
@@ -5790,6 +5793,16 @@ function smithManoeuvreSim_(o) {
   var rH = Number(o.helocRate) / 12;
   var rInv = Math.pow(1 + Number(o.investmentReturn), 1 / 12) - 1;
 
+  // --- Toggles ---
+  // interestMethod: "Capitalize" (borrow the HELOC interest — self-funding) or
+  // "Out-of-pocket" (pay it from cash; HELOC doesn't grow from interest).
+  var capitalize = String(o.interestMethod || 'capitalize').toLowerCase().indexOf('out') < 0;
+  // Dividend yield only bites in the cash-flow-"dam" mode, where distributions
+  // are pulled out as cash to pay down the mortgage (then re-borrowed/invested).
+  // In "Reinvest" mode distributions are assumed already inside investmentReturn.
+  var divYieldM = (Number(o.dividendYield) || 0) / 12;
+  var divToMortgage = /mort|dam/.test(String(o.dividendUse || '').toLowerCase());
+
   // Fixed monthly mortgage payment over the original amortization.
   var payment = (rM === 0)
     ? mortgageBalance / amortMonths
@@ -5799,8 +5812,8 @@ function smithManoeuvreSim_(o) {
   var investBalance = Number(o.investBalanceStart) || 0;
 
   var rows = [];
-  var yearDeductible = 0;
-  var cumDeductible = 0, cumRefund = 0;
+  var yearDeductible = 0, yearOutOfPocket = 0;
+  var cumDeductible = 0, cumRefund = 0, cumOutOfPocket = 0;
   var payoffMonth = null;
 
   for (var m = 1; m <= months; m++) {
@@ -5813,13 +5826,32 @@ function smithManoeuvreSim_(o) {
       investBalance += principal;  // …and invest it
     }
 
-    // --- HELOC interest (capitalized, deductible) ---
+    // --- HELOC interest (always deductible; capitalized or paid out-of-pocket) ---
     var hInt = helocBalance * rH;
-    helocBalance += hInt;
+    if (capitalize) {
+      helocBalance += hInt;        // borrow the interest (self-funding)
+    } else {
+      yearOutOfPocket += hInt;     // pay from cash; HELOC balance unchanged
+    }
     yearDeductible += hInt;
 
-    // --- Investment growth ---
+    // --- Investment growth (total return) ---
     investBalance *= (1 + rInv);
+
+    // --- Cash-flow dam: pull distributions out to pay down the mortgage ---
+    if (divToMortgage && divYieldM > 0) {
+      var div = investBalance * divYieldM;
+      investBalance -= div;
+      if (mortgageBalance > 0) {
+        var damPay = Math.min(div, mortgageBalance);
+        mortgageBalance -= damPay;
+        helocBalance += damPay;    // re-borrow freed credit & invest
+        investBalance += damPay;
+        if (div > damPay) investBalance += (div - damPay); // mortgage gone → reinvest rest
+      } else {
+        investBalance += div;      // mortgage gone → reinvest
+      }
+    }
 
     if (payoffMonth === null && mortgageBalance <= 0.005) {
       payoffMonth = m;
@@ -5831,6 +5863,7 @@ function smithManoeuvreSim_(o) {
       var refund = yearDeductible * tax;
       cumDeductible += yearDeductible;
       cumRefund += refund;
+      cumOutOfPocket += yearOutOfPocket;
 
       if (asBool_(o.applyRefundToMortgage) && mortgageBalance > 0 && refund > 0) {
         var prepay = Math.min(refund, mortgageBalance);
@@ -5851,9 +5884,11 @@ function smithManoeuvreSim_(o) {
         invest: investBalance,
         deductible: yearDeductible,
         refund: refund,
+        outOfPocket: yearOutOfPocket,
         netEquity: investBalance - helocBalance
       });
       yearDeductible = 0;
+      yearOutOfPocket = 0;
     }
   }
 
@@ -5862,7 +5897,10 @@ function smithManoeuvreSim_(o) {
     payoffMonth: payoffMonth,
     payment: payment,
     cumDeductible: cumDeductible,
-    cumRefund: cumRefund
+    cumRefund: cumRefund,
+    cumOutOfPocket: cumOutOfPocket,
+    capitalize: capitalize,
+    divToMortgage: divToMortgage
   };
 }
 
@@ -5880,15 +5918,18 @@ function smithManoeuvreSim_(o) {
  * @param {number} marginalTaxRate      Marginal tax rate for the deduction (decimal)
  * @param {boolean} applyRefundToMortgage TRUE to apply the tax refund to the mortgage (accelerator)
  * @param {number} projectionYears      Years to project (optional; defaults to amortizationYears)
+ * @param {string} interestMethod       Optional: "Capitalize" (default) or "Out-of-pocket"
+ * @param {number} dividendYield        Optional: distribution yield used in dam mode (decimal)
+ * @param {string} dividendUse          Optional: "Reinvest" (default) or "Pay down mortgage" (cash-flow dam)
  *
  * @return {Array[]} Table: Year, Mortgage, HELOC, Total Debt, Investments,
- *                    Deductible Interest, Tax Refund, Net (Invest − HELOC)
+ *                    Deductible Interest, Tax Refund, Out-of-Pocket, Net (Invest − HELOC)
  * @customfunction
  *
- * Example:
- * =SMITH_MANOEUVRE_SCHEDULE(400000, 0.05, 25, 0.065, 0.06, 0.40, TRUE, 25)
+ * Example (out-of-pocket interest + cash-flow dam at a 2% yield):
+ * =SMITH_MANOEUVRE_SCHEDULE(400000, 0.05, 25, 0.065, 0.06, 0.40, TRUE, 25, "Out-of-pocket", 0.02, "Pay down mortgage")
  */
-function SMITH_MANOEUVRE_SCHEDULE(mortgageBalance, mortgageRate, amortizationYears, helocRate, investmentReturn, marginalTaxRate, applyRefundToMortgage, projectionYears) {
+function SMITH_MANOEUVRE_SCHEDULE(mortgageBalance, mortgageRate, amortizationYears, helocRate, investmentReturn, marginalTaxRate, applyRefundToMortgage, projectionYears, interestMethod, dividendYield, dividendUse) {
   if (!Number(projectionYears)) projectionYears = amortizationYears;
 
   var sim = smithManoeuvreSim_({
@@ -5899,12 +5940,15 @@ function SMITH_MANOEUVRE_SCHEDULE(mortgageBalance, mortgageRate, amortizationYea
     investmentReturn: investmentReturn,
     marginalTaxRate: marginalTaxRate,
     applyRefundToMortgage: applyRefundToMortgage,
-    projectionYears: projectionYears
+    projectionYears: projectionYears,
+    interestMethod: interestMethod,
+    dividendYield: dividendYield,
+    dividendUse: dividendUse
   });
 
   var table = [[
     'Year', 'Mortgage', 'HELOC (invest. loan)', 'Total Debt', 'Investments',
-    'Deductible Interest', 'Tax Refund', 'Net (Invest − HELOC)'
+    'Deductible Interest', 'Tax Refund', 'Out-of-Pocket', 'Net (Invest − HELOC)'
   ]];
   for (var i = 0; i < sim.rows.length; i++) {
     var r = sim.rows[i];
@@ -5916,6 +5960,7 @@ function SMITH_MANOEUVRE_SCHEDULE(mortgageBalance, mortgageRate, amortizationYea
       Math.round(r.invest),
       Math.round(r.deductible),
       Math.round(r.refund),
+      Math.round(r.outOfPocket),
       Math.round(r.netEquity)
     ]);
   }
@@ -5936,14 +5981,17 @@ function SMITH_MANOEUVRE_SCHEDULE(mortgageBalance, mortgageRate, amortizationYea
  * @param {number} marginalTaxRate      Marginal tax rate (decimal)
  * @param {boolean} applyRefundToMortgage TRUE to apply the tax refund (accelerator)
  * @param {number} projectionYears      Years to project (optional; defaults to amortizationYears)
+ * @param {string} interestMethod       Optional: "Capitalize" (default) or "Out-of-pocket"
+ * @param {number} dividendYield        Optional: distribution yield used in dam mode (decimal)
+ * @param {string} dividendUse          Optional: "Reinvest" (default) or "Pay down mortgage" (cash-flow dam)
  *
  * @return {Array[]} Two-column summary table
  * @customfunction
  *
  * Example:
- * =SMITH_MANOEUVRE_SUMMARY(400000, 0.05, 25, 0.065, 0.06, 0.40, TRUE, 25)
+ * =SMITH_MANOEUVRE_SUMMARY(400000, 0.05, 25, 0.065, 0.06, 0.40, TRUE, 25, "Capitalize", 0, "Reinvest")
  */
-function SMITH_MANOEUVRE_SUMMARY(mortgageBalance, mortgageRate, amortizationYears, helocRate, investmentReturn, marginalTaxRate, applyRefundToMortgage, projectionYears) {
+function SMITH_MANOEUVRE_SUMMARY(mortgageBalance, mortgageRate, amortizationYears, helocRate, investmentReturn, marginalTaxRate, applyRefundToMortgage, projectionYears, interestMethod, dividendYield, dividendUse) {
   if (!Number(projectionYears)) projectionYears = amortizationYears;
 
   var sim = smithManoeuvreSim_({
@@ -5954,7 +6002,10 @@ function SMITH_MANOEUVRE_SUMMARY(mortgageBalance, mortgageRate, amortizationYear
     investmentReturn: investmentReturn,
     marginalTaxRate: marginalTaxRate,
     applyRefundToMortgage: applyRefundToMortgage,
-    projectionYears: projectionYears
+    projectionYears: projectionYears,
+    interestMethod: interestMethod,
+    dividendYield: dividendYield,
+    dividendUse: dividendUse
   });
 
   var last = sim.rows.length ? sim.rows[sim.rows.length - 1] : null;
@@ -5964,6 +6015,8 @@ function SMITH_MANOEUVRE_SUMMARY(mortgageBalance, mortgageRate, amortizationYear
 
   return [
     ['Smith Manoeuvre Summary', ''],
+    ['Interest method', sim.capitalize ? 'Capitalize (self-funding)' : 'Out-of-pocket'],
+    ['Dividend handling', sim.divToMortgage ? 'Cash-flow dam (pay mortgage)' : 'Reinvest'],
     ['Monthly mortgage payment', Math.round(sim.payment)],
     ['Mortgage paid off in (years)', payoffText],
     ['Traditional amortization (years)', Number(amortizationYears)],
@@ -5973,6 +6026,507 @@ function SMITH_MANOEUVRE_SUMMARY(mortgageBalance, mortgageRate, amortizationYear
     ['Net investment equity (Invest − HELOC)', last ? Math.round(last.netEquity) : 0],
     ['Total deductible interest', Math.round(sim.cumDeductible)],
     ['Total tax refunds', Math.round(sim.cumRefund)],
+    ['Total out-of-pocket interest', Math.round(sim.cumOutOfPocket)],
     ['Note', 'Leveraged strategy — investment & rate risk apply. Educational only, not advice.']
   ];
+}
+
+
+/**
+ * ----------------------------------------------------------------------
+ * SECTION 39 – Salary / career income projection
+ * ----------------------------------------------------------------------
+ */
+
+/**
+ * SALARY_PROJECTION
+ *
+ * Projects career income year by year with a base annual raise plus optional
+ * one-off promotion bumps, in both nominal and real (today's $) terms.
+ *
+ * @param {number} currentSalary   Current gross annual salary
+ * @param {number} annualRaisePct  Typical annual raise (decimal, e.g. 0.03)
+ * @param {number} years           Years to project
+ * @param {number} inflationRate   Inflation rate for the real column (decimal)
+ * @param {number} promoEveryYears Optional: a promotion bump every N years
+ * @param {number} promoBumpPct    Optional: extra raise at each promotion (decimal, e.g. 0.10)
+ *
+ * @return {Array[]} Table: Year, Year #, Salary (nominal), Salary (today's $), Cumulative Earnings
+ * @customfunction
+ *
+ * Example (3%/yr + a 10% promotion every 5 years for 30 years):
+ * =SALARY_PROJECTION(70000, 0.03, 30, 0.025, 5, 0.10)
+ */
+function SALARY_PROJECTION(currentSalary, annualRaisePct, years, inflationRate, promoEveryYears, promoBumpPct) {
+  currentSalary  = Number(currentSalary);
+  annualRaisePct = Number(annualRaisePct) || 0;
+  years          = Number(years);
+  inflationRate  = Number(inflationRate) || 0;
+  promoEveryYears = Number(promoEveryYears) || 0;
+  promoBumpPct   = Number(promoBumpPct) || 0;
+
+  if (years <= 0) return [["ERROR: years must be greater than 0"]];
+
+  var startYear = (new Date()).getFullYear();
+  var salary = currentSalary;
+  var cumulative = 0;
+  var table = [['Year', 'Year #', 'Salary (nominal)', "Salary (today's $)", 'Cumulative Earnings']];
+
+  for (var t = 0; t < years; t++) {
+    if (t > 0) {
+      salary *= (1 + annualRaisePct);
+      if (promoEveryYears > 0 && promoBumpPct > 0 && (t % promoEveryYears === 0)) {
+        salary *= (1 + promoBumpPct);
+      }
+    }
+    cumulative += salary;
+    var real = salary / Math.pow(1 + inflationRate, t);
+    table.push([
+      startYear + t,
+      t + 1,
+      Math.round(salary),
+      Math.round(real),
+      Math.round(cumulative)
+    ]);
+  }
+  return table;
+}
+
+
+/**
+ * ----------------------------------------------------------------------
+ * SECTION 40 – Mortgage suite (payment, amortization, affordability)
+ * ----------------------------------------------------------------------
+ */
+
+/**
+ * mortgageMonthlyRate_
+ * Converts an annual fixed-mortgage rate (Canadian semi-annual compounding) to
+ * an effective monthly rate.
+ * @private
+ */
+function mortgageMonthlyRate_(annualRate) {
+  return Math.pow(1 + Number(annualRate) / 2, 1 / 6) - 1;
+}
+
+/**
+ * MORTGAGE_PAYMENT
+ *
+ * Monthly mortgage payment using Canadian semi-annual compounding.
+ *
+ * @param {number} principal        Loan amount
+ * @param {number} annualRate       Annual interest rate (decimal)
+ * @param {number} amortizationYears Amortization (years)
+ *
+ * @return {number} Monthly payment
+ * @customfunction
+ *
+ * Example:
+ * =MORTGAGE_PAYMENT(500000, 0.05, 25)
+ */
+function MORTGAGE_PAYMENT(principal, annualRate, amortizationYears) {
+  principal = Number(principal);
+  var n = Math.round(Number(amortizationYears) * 12);
+  var r = mortgageMonthlyRate_(annualRate);
+  var pmt = (r === 0) ? principal / n : principal * r / (1 - Math.pow(1 + r, -n));
+  return Math.round(pmt * 100) / 100;
+}
+
+/**
+ * MORTGAGE_SCHEDULE
+ *
+ * Year-by-year amortization: payment, interest, principal, and remaining balance.
+ * Optional annual lump-sum prepayment accelerates the payoff.
+ *
+ * @param {number} principal         Loan amount
+ * @param {number} annualRate        Annual interest rate (decimal)
+ * @param {number} amortizationYears Amortization (years)
+ * @param {number} annualPrepayment  Optional: extra principal paid each year
+ *
+ * @return {Array[]} Table: Year, Payments, Interest, Principal, Prepayment, Balance
+ * @customfunction
+ *
+ * Example:
+ * =MORTGAGE_SCHEDULE(500000, 0.05, 25, 0)
+ */
+function MORTGAGE_SCHEDULE(principal, annualRate, amortizationYears, annualPrepayment) {
+  var balance = Number(principal);
+  var n = Math.round(Number(amortizationYears) * 12);
+  var r = mortgageMonthlyRate_(annualRate);
+  annualPrepayment = Number(annualPrepayment) || 0;
+  var pmt = (r === 0) ? balance / n : balance * r / (1 - Math.pow(1 + r, -n));
+
+  var startYear = (new Date()).getFullYear();
+  var table = [['Year', 'Payments', 'Interest', 'Principal', 'Prepayment', 'Balance']];
+
+  var yInt = 0, yPrin = 0, yPmt = 0, yPre = 0, month = 0;
+  while (balance > 0.005 && month < n + 1) {
+    month++;
+    var interest = balance * r;
+    var principalPaid = Math.min(pmt - interest, balance);
+    if (principalPaid < 0) principalPaid = 0;
+    balance -= principalPaid;
+    yInt += interest; yPrin += principalPaid; yPmt += Math.min(pmt, interest + principalPaid);
+
+    if (month % 12 === 0 || balance <= 0.005) {
+      // Annual prepayment applied at year-end.
+      var pre = 0;
+      if (annualPrepayment > 0 && balance > 0) {
+        pre = Math.min(annualPrepayment, balance);
+        balance -= pre;
+      }
+      yPre += pre;
+      table.push([
+        startYear + Math.ceil(month / 12) - 1,
+        Math.round(yPmt),
+        Math.round(yInt),
+        Math.round(yPrin),
+        Math.round(pre),
+        Math.round(balance)
+      ]);
+      yInt = 0; yPrin = 0; yPmt = 0;
+      if (balance <= 0.005) break;
+    }
+  }
+  return table;
+}
+
+/**
+ * MORTGAGE_AFFORDABILITY
+ *
+ * Maximum mortgage and home price you can qualify for under Canadian GDS/TDS
+ * limits, stress-tested at the higher of (contract rate + 2%) and 5.25%.
+ *
+ * @param {number} grossAnnualIncome Household gross annual income
+ * @param {number} monthlyDebts      Other monthly debt payments (loans, cards, etc.)
+ * @param {number} annualPropertyTax Estimated annual property tax
+ * @param {number} monthlyHeat       Estimated monthly heating cost
+ * @param {number} contractRate      Mortgage contract rate (decimal, e.g. 0.05)
+ * @param {number} amortizationYears Amortization (years)
+ * @param {number} downPayment       Down payment available
+ *
+ * @return {Array[]} Two-column summary: qualifying rate, max payment, max mortgage, max price
+ * @customfunction
+ *
+ * Example:
+ * =MORTGAGE_AFFORDABILITY(120000, 500, 4000, 150, 0.05, 25, 100000)
+ */
+function MORTGAGE_AFFORDABILITY(grossAnnualIncome, monthlyDebts, annualPropertyTax, monthlyHeat, contractRate, amortizationYears, downPayment) {
+  grossAnnualIncome = Number(grossAnnualIncome);
+  monthlyDebts      = Number(monthlyDebts) || 0;
+  annualPropertyTax = Number(annualPropertyTax) || 0;
+  monthlyHeat       = Number(monthlyHeat) || 0;
+  contractRate      = Number(contractRate);
+  downPayment       = Number(downPayment) || 0;
+
+  var GDS = 0.39, TDS = 0.44;
+  var monthlyIncome = grossAnnualIncome / 12;
+  var monthlyTax = annualPropertyTax / 12;
+
+  // Stress-test qualifying rate.
+  var qualRate = Math.max(contractRate + 0.02, 0.0525);
+  var r = mortgageMonthlyRate_(qualRate);
+  var n = Math.round(Number(amortizationYears) * 12);
+
+  // Max housing payment (P+I) under each ratio, after non-mortgage housing costs.
+  var housingAllowanceGDS = GDS * monthlyIncome - monthlyTax - monthlyHeat;
+  var housingAllowanceTDS = TDS * monthlyIncome - monthlyTax - monthlyHeat - monthlyDebts;
+  var maxPI = Math.max(0, Math.min(housingAllowanceGDS, housingAllowanceTDS));
+
+  // Convert max P+I to a mortgage principal at the qualifying rate.
+  var maxMortgage = (r === 0) ? maxPI * n : maxPI * (1 - Math.pow(1 + r, -n)) / r;
+  var maxPrice = maxMortgage + downPayment;
+
+  return [
+    ['Mortgage Affordability (stress-tested)', ''],
+    ['Qualifying rate', Math.round(qualRate * 10000) / 100 + '%'],
+    ['Max housing payment (P+I) / mo', Math.round(maxPI)],
+    ['Max mortgage', Math.round(maxMortgage)],
+    ['Down payment', Math.round(downPayment)],
+    ['Max home price', Math.round(maxPrice)],
+    ['GDS / TDS limits used', (GDS * 100) + '% / ' + (TDS * 100) + '%'],
+    ['Note', 'Approximate. Lenders also apply insurance, credit, and down-payment rules.']
+  ];
+}
+
+
+/**
+ * ----------------------------------------------------------------------
+ * SECTION 41 – Emergency fund
+ * ----------------------------------------------------------------------
+ */
+
+/**
+ * EMERGENCY_FUND_PLAN
+ *
+ * Target emergency fund and a plan to reach it from current savings.
+ *
+ * @param {number} monthlyEssentialExpenses Essential monthly spending (housing, food, utilities, debts)
+ * @param {number} monthsOfCoverage         Months of coverage to hold (e.g. 3–6)
+ * @param {number} currentSavings           Emergency savings already set aside
+ * @param {number} monthlyContribution      Planned monthly top-up
+ *
+ * @return {Array[]} Two-column summary: target, gap, months to fully fund
+ * @customfunction
+ *
+ * Example:
+ * =EMERGENCY_FUND_PLAN(4000, 6, 5000, 500)
+ */
+function EMERGENCY_FUND_PLAN(monthlyEssentialExpenses, monthsOfCoverage, currentSavings, monthlyContribution) {
+  monthlyEssentialExpenses = Number(monthlyEssentialExpenses);
+  monthsOfCoverage         = Number(monthsOfCoverage) || 3;
+  currentSavings           = Number(currentSavings) || 0;
+  monthlyContribution      = Number(monthlyContribution) || 0;
+
+  var target = monthlyEssentialExpenses * monthsOfCoverage;
+  var gap = Math.max(0, target - currentSavings);
+  var monthsToFund = (gap <= 0) ? 0 : (monthlyContribution > 0 ? Math.ceil(gap / monthlyContribution) : 'Set a monthly contribution');
+
+  return [
+    ['Emergency Fund Plan', ''],
+    ['Monthly essential expenses', Math.round(monthlyEssentialExpenses)],
+    ['Months of coverage', monthsOfCoverage],
+    ['Target fund', Math.round(target)],
+    ['Current savings', Math.round(currentSavings)],
+    ['Funding gap', Math.round(gap)],
+    ['Months to fully fund', monthsToFund]
+  ];
+}
+
+
+/**
+ * ----------------------------------------------------------------------
+ * SECTION 42 – Take-home pay (CPP/EI/tax)
+ * ----------------------------------------------------------------------
+ */
+
+var PAYROLL_2024 = {
+  CPP_YMPE: 68500, CPP_EXEMPTION: 3500, CPP_RATE: 0.0595, CPP_MAX: 3867.50,
+  EI_MAX_INSURABLE: 63200, EI_RATE: 0.0166, EI_MAX: 1049.12,         // non-Quebec
+  EI_RATE_QC: 0.0132, EI_MAX_QC: 834.24                              // Quebec (QPIP separate, not modelled)
+};
+
+/**
+ * TAKE_HOME_PAY
+ *
+ * Approximate annual take-home (net) pay after CPP, EI, and income tax.
+ *
+ * @param {number} grossSalary Gross annual employment income
+ * @param {string} province    Province code (ON, BC, AB, QC, …)
+ *
+ * @return {Array[]} Two-column breakdown: CPP, EI, tax, net annual & monthly
+ * @customfunction
+ *
+ * Example:
+ * =TAKE_HOME_PAY(85000, "ON")
+ */
+function TAKE_HOME_PAY(grossSalary, province) {
+  grossSalary = Number(grossSalary);
+  province = (province || 'ON').toString().trim().toUpperCase();
+
+  var cpp = Math.min(PAYROLL_2024.CPP_MAX, Math.max(0, grossSalary - PAYROLL_2024.CPP_EXEMPTION) * PAYROLL_2024.CPP_RATE);
+  var isQC = (province === 'QC');
+  var eiRate = isQC ? PAYROLL_2024.EI_RATE_QC : PAYROLL_2024.EI_RATE;
+  var eiMax = isQC ? PAYROLL_2024.EI_MAX_QC : PAYROLL_2024.EI_MAX;
+  var ei = Math.min(eiMax, grossSalary * eiRate);
+
+  var tax = ESTIMATE_TAX(grossSalary, province);
+  if (typeof tax === 'string') return [["ERROR: " + tax]];
+
+  var net = grossSalary - cpp - ei - tax;
+
+  return [
+    ['Take-Home Pay (approx.)', ''],
+    ['Gross salary', Math.round(grossSalary)],
+    ['CPP contribution', Math.round(cpp)],
+    ['EI premium', Math.round(ei)],
+    ['Income tax', Math.round(tax)],
+    ['Net annual', Math.round(net)],
+    ['Net monthly', Math.round(net / 12)],
+    ['Average tax+deduction rate', Math.round((1 - net / grossSalary) * 1000) / 10 + '%'],
+    ['Note', 'Approximate: 2024 CPP/EI, basic tax brackets, no credits beyond BPA. Quebec QPIP/QPP not fully modelled.']
+  ];
+}
+
+
+/**
+ * ----------------------------------------------------------------------
+ * SECTION 43 – Debt payoff (avalanche / snowball)
+ * ----------------------------------------------------------------------
+ */
+
+/**
+ * DEBT_PAYOFF_MONTHS
+ *
+ * Months to pay off a single debt at a fixed monthly payment, and total interest.
+ *
+ * @param {number} balance        Current balance
+ * @param {number} annualRate     Annual interest rate / APR (decimal)
+ * @param {number} monthlyPayment Fixed monthly payment
+ *
+ * @return {Array[]} Two-column summary: months, years, total interest, total paid
+ * @customfunction
+ *
+ * Example:
+ * =DEBT_PAYOFF_MONTHS(15000, 0.1999, 500)
+ */
+function DEBT_PAYOFF_MONTHS(balance, annualRate, monthlyPayment) {
+  balance = Number(balance);
+  var r = Number(annualRate) / 12;
+  monthlyPayment = Number(monthlyPayment);
+
+  if (monthlyPayment <= balance * r) {
+    return [['ERROR: payment too low — never pays off (covers only interest)', '']];
+  }
+
+  var months = 0, totalInterest = 0, bal = balance;
+  while (bal > 0.005 && months < 1200) {
+    var interest = bal * r;
+    var principal = Math.min(monthlyPayment - interest, bal);
+    bal -= principal;
+    totalInterest += interest;
+    months++;
+  }
+
+  return [
+    ['Debt Payoff', ''],
+    ['Months to pay off', months],
+    ['Years to pay off', Math.round(months / 12 * 10) / 10],
+    ['Total interest paid', Math.round(totalInterest)],
+    ['Total amount paid', Math.round(balance + totalInterest)]
+  ];
+}
+
+/**
+ * ensureDebtsSheet_
+ * Creates the DEBTS sheet with headers and example rows if it doesn't exist.
+ * @private
+ */
+function ensureDebtsSheet_() {
+  var ss = SpreadsheetApp.getActive();
+  var sheet = ss.getSheetByName('DEBTS');
+  if (sheet) return sheet;
+
+  sheet = ss.insertSheet('DEBTS');
+  var headers = ['Debt', 'Balance', 'APR', 'Minimum Payment', 'Payoff Order', 'Months to Payoff', 'Interest Paid'];
+  var examples = [
+    ['Credit card', 9000, 0.1999, 250, '', '', ''],
+    ['Car loan', 18000, 0.069, 350, '', '', ''],
+    ['Line of credit', 12000, 0.099, 200, '', '', ''],
+    ['Student loan', 15000, 0.045, 200, '', '', '']
+  ];
+  sheet.getRange(1, 1, 1, headers.length).setValues([headers]).setFontWeight('bold');
+  sheet.getRange(2, 1, examples.length, headers.length).setValues(examples);
+  // Strategy + extra-payment cells
+  sheet.getRange(7, 1, 2, 2).setValues([
+    ['Strategy (Avalanche/Snowball)', 'Avalanche'],
+    ['Extra monthly payment', 300]
+  ]);
+  sheet.setFrozenRows(1);
+  return sheet;
+}
+
+/**
+ * setupDebtsSheet
+ * Menu action: create/verify the DEBTS sheet.
+ */
+function setupDebtsSheet() {
+  ensureDebtsSheet_();
+  SpreadsheetApp.getActive().toast('DEBTS sheet ready. Enter your debts, set the strategy, then run "Run Debt Payoff".');
+}
+
+/**
+ * runDebtPayoff
+ *
+ * Menu action: simulate paying off all debts on the DEBTS sheet using either the
+ * Avalanche (highest APR first) or Snowball (smallest balance first) method,
+ * applying every freed-up minimum plus the extra payment to the focus debt.
+ */
+function runDebtPayoff() {
+  try {
+    var ss = SpreadsheetApp.getActive();
+    var sheet = ensureDebtsSheet_();
+    var lastRow = sheet.getLastRow();
+
+    // Read strategy + extra payment from the labelled cells (search column A).
+    var strategy = 'avalanche';
+    var extra = 0;
+    var aVals = sheet.getRange(1, 1, lastRow, 2).getValues();
+    for (var k = 0; k < aVals.length; k++) {
+      var label = String(aVals[k][0] || '').toLowerCase();
+      if (label.indexOf('strategy') >= 0) strategy = String(aVals[k][1] || 'avalanche').toLowerCase();
+      if (label.indexOf('extra') >= 0) extra = Number(aVals[k][1]) || 0;
+    }
+
+    // Read debts (rows whose APR/Balance are numeric and not the strategy rows).
+    var debts = [];
+    var data = sheet.getRange(2, 1, lastRow - 1, 4).getValues();
+    for (var i = 0; i < data.length; i++) {
+      var name = data[i][0];
+      var bal = Number(data[i][1]);
+      var apr = Number(data[i][2]);
+      var minP = Number(data[i][3]);
+      if (!name || String(name).toLowerCase().indexOf('strategy') >= 0 || String(name).toLowerCase().indexOf('extra') >= 0) continue;
+      if (!bal || isNaN(bal) || bal <= 0) continue;
+      debts.push({ row: i + 2, name: name, bal: bal, apr: apr, min: minP, months: 0, interest: 0, done: false });
+    }
+    if (!debts.length) { ss.toast('No debts found on the DEBTS sheet.'); return; }
+
+    // Ordering.
+    var order = debts.slice();
+    if (strategy.indexOf('snow') >= 0) {
+      order.sort(function (a, b) { return a.bal - b.bal; });   // smallest balance first
+    } else {
+      order.sort(function (a, b) { return b.apr - a.apr; });   // highest APR first
+      strategy = 'avalanche';
+    }
+    for (var p = 0; p < order.length; p++) order[p].payoffOrder = p + 1;
+
+    // Simulate month by month; rolled-up payments cascade to the focus debt.
+    var month = 0;
+    var totalRemaining = function () { var s = 0; for (var z = 0; z < debts.length; z++) s += debts[z].bal; return s; };
+    while (totalRemaining() > 0.005 && month < 1200) {
+      month++;
+      var pool = extra;
+      // Accrue interest and pay minimums.
+      for (var d = 0; d < debts.length; d++) {
+        var dt = debts[d];
+        if (dt.bal <= 0.005) { continue; }
+        var interest = dt.bal * (dt.apr / 12);
+        dt.bal += interest;
+        dt.interest += interest;
+        var pay = Math.min(dt.min, dt.bal);
+        dt.bal -= pay;
+        // Freed minimums from cleared debts add to the pool.
+      }
+      // Apply pool to the first not-done debt in order.
+      for (var f = 0; f < order.length && pool > 0.005; f++) {
+        var fd = order[f];
+        if (fd.bal <= 0.005) continue;
+        var applied = Math.min(pool, fd.bal);
+        fd.bal -= applied;
+        pool -= applied;
+      }
+      // Track payoff month and roll freed minimums into the extra pool next month.
+      for (var e = 0; e < debts.length; e++) {
+        if (debts[e].bal <= 0.005 && !debts[e].done) {
+          debts[e].done = true;
+          debts[e].months = month;
+          extra += debts[e].min;   // snowball/avalanche roll-up
+        }
+      }
+    }
+
+    // Write per-debt results.
+    for (var w = 0; w < debts.length; w++) {
+      var rr = debts[w];
+      sheet.getRange(rr.row, 5, 1, 3).setValues([[
+        rr.payoffOrder || '', rr.months || ('> ' + month), Math.round(rr.interest)
+      ]]);
+    }
+    ss.toast('Debt payoff (' + strategy + ') complete in ' + month + ' months. See the payoff columns.');
+  } catch (e) {
+    SpreadsheetApp.getUi().alert('Error running debt payoff: ' + e.message);
+    throw e;
+  }
 }

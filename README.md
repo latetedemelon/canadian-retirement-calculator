@@ -15,7 +15,10 @@ This project provides a Google Apps Script file (`code.gs`) that plugs into a Go
 - **RESP / CESG education planner** — year-by-year schedule with grant and lifetime caps
 - **Lifestyle goals** — recurring yearly **trip savings** and full **vehicle planning** (sinking fund, replacement schedule, total cost of ownership)
 - **Big-purchase goals** — a one-click **GOALS sheet** (down payment, renovation, wedding, boat/RV, home systems, lifetime vehicle) that solves the required monthly/annual savings for each
-- **HELOC & Smith Manoeuvre** calculator — converts a mortgage into a tax-deductible investment loan, year by year
+- **HELOC & Smith Manoeuvre** calculator — converts a mortgage into a tax-deductible investment loan, with capitalize / out-of-pocket / cash-flow-dam toggles
+- **Mortgage suite** — payment, amortization (with prepayments), and stress-tested affordability (GDS/TDS)
+- **Salary / career income** projection with raises and promotions
+- **Take-home pay**, **emergency fund**, and a **debt-payoff tab** (avalanche / snowball)
 - **Tax estimation** for all 13 provinces and territories (2024 brackets)
 - And many more retirement planning functions...
 
@@ -59,6 +62,11 @@ This project provides a Google Apps Script file (`code.gs`) that plugs into a Go
 34. [Lifestyle Goals — Trip Savings & Vehicle Planning](#34-lifestyle-goals--trip-savings--vehicle-planning)
 35. [Big-Purchase Goals & the GOALS Sheet](#35-big-purchase-goals--the-goals-sheet)
 36. [HELOC & Smith Manoeuvre](#36-heloc--smith-manoeuvre)
+37. [Salary / Career Income](#37-salary--career-income)
+38. [Mortgage Suite](#38-mortgage-suite)
+39. [Emergency Fund](#39-emergency-fund)
+40. [Take-Home Pay](#40-take-home-pay)
+41. [Debt Payoff (Avalanche / Snowball)](#41-debt-payoff-avalanche--snowball)
 
 ---
 
@@ -577,6 +585,18 @@ Comprehensive income breakdown at a specific age.
 | `SMITH_MANOEUVRE_SCHEDULE` | Year-by-year mortgage→deductible-loan conversion | Exact math |
 | `SMITH_MANOEUVRE_SUMMARY` | Headline results & years saved | Exact math |
 
+#### Everyday / Life Finance
+| Function | Purpose | Accuracy |
+|----------|---------|----------|
+| `SALARY_PROJECTION` | Career income with raises & promotions | Exact math |
+| `MORTGAGE_PAYMENT` | Monthly mortgage payment | Exact (semi-annual comp.) |
+| `MORTGAGE_SCHEDULE` | Amortization with prepayments | Exact math |
+| `MORTGAGE_AFFORDABILITY` | Max mortgage/price (stress-tested GDS/TDS) | Approximation |
+| `EMERGENCY_FUND_PLAN` | Target fund & months to fund | Exact math |
+| `TAKE_HOME_PAY` | Net pay after CPP/EI/tax | Approximation |
+| `DEBT_PAYOFF_MONTHS` | Single-debt payoff time & interest | Exact math |
+| `runDebtPayoff` (menu) | Avalanche/snowball across all debts | Exact math |
+
 #### Non-Registered Accounts
 | Function | Purpose | Accuracy |
 |----------|---------|----------|
@@ -988,21 +1008,106 @@ The **Smith Manoeuvre** is a Canadian strategy that gradually turns a non-deduct
 |----------|---------|
 | `HELOC_AVAILABLE_CREDIT(homeValue, mortgageBalance, existingHeloc)` | Available HELOC room under the **65%** standalone / **80%** combined LTV limits |
 | `HELOC_INTEREST_ONLY_PAYMENT(balance, annualRate)` | Monthly interest-only (minimum) HELOC payment |
-| `SMITH_MANOEUVRE_SCHEDULE(mortgageBalance, mortgageRate, amortizationYears, helocRate, investmentReturn, marginalTaxRate, applyRefundToMortgage, projectionYears)` | Year-by-year: mortgage, HELOC, total debt, investments, deductible interest, tax refund, net equity |
-| `SMITH_MANOEUVRE_SUMMARY(...)` | Payoff time, years saved, final portfolio/HELOC, net equity, total refunds |
+| `SMITH_MANOEUVRE_SCHEDULE(mortgageBalance, mortgageRate, amortizationYears, helocRate, investmentReturn, marginalTaxRate, applyRefundToMortgage, projectionYears, interestMethod, dividendYield, dividendUse)` | Year-by-year: mortgage, HELOC, total debt, investments, deductible interest, tax refund, out-of-pocket, net equity |
+| `SMITH_MANOEUVRE_SUMMARY(...)` | Payoff time, years saved, final portfolio/HELOC, net equity, refunds, out-of-pocket |
+
+### Variant toggles
+
+The last three arguments select the variant (all optional):
+
+| Argument | Options | Effect |
+|----------|---------|--------|
+| `interestMethod` | `"Capitalize"` (default) / `"Out-of-pocket"` | Capitalize borrows the HELOC interest (self-funding, HELOC grows); out-of-pocket pays it from cash (HELOC stays flat, tracked as *out-of-pocket interest*) |
+| `dividendYield` | decimal, e.g. `0.02` | Distribution yield used **only** in the cash-flow-dam mode |
+| `dividendUse` | `"Reinvest"` (default) / `"Pay down mortgage"` | Reinvest assumes distributions are already in the return; "Pay down mortgage" is the **cash-flow dam** — distributions accelerate the mortgage, then are re-borrowed and invested |
 
 ```
-=SMITH_MANOEUVRE_SUMMARY(400000, 0.05, 25, 0.065, 0.06, 0.40, TRUE, 25)
+# Classic self-funding variant:
+=SMITH_MANOEUVRE_SUMMARY(400000, 0.05, 25, 0.065, 0.06, 0.40, TRUE, 25, "Capitalize", 0, "Reinvest")
+# Out-of-pocket interest + cash-flow dam at a 2% yield:
+=SMITH_MANOEUVRE_SUMMARY(400000, 0.05, 25, 0.065, 0.06, 0.40, TRUE, 25, "Out-of-pocket", 0.02, "Pay down mortgage")
 ```
 
 ### Modelling assumptions
 
 - Fixed mortgage rate uses **Canadian semi-annual compounding** (converted to monthly); HELOC and returns compound monthly.
-- The HELOC interest is **capitalized** (the "self-funding" / no-out-of-pocket variant).
+- HELOC interest is either **capitalized** (self-funding) or **paid out-of-pocket** — your choice via `interestMethod`.
 - The tax refund on deductible interest is computed yearly and, when `applyRefundToMortgage` is TRUE, applied to the mortgage (which frees more credit to re-borrow and invest — the "accelerator").
 - **Net equity = Investments − HELOC.** It turns positive only when your return comfortably exceeds the HELOC rate, so the result is highly sensitive to that spread.
 
 > ⚠️ The Smith Manoeuvre is a **leveraged investment strategy** — it amplifies both gains and losses and carries interest-rate, investment, and tax risk. This calculator is educational only and is **not** financial, tax, or investment advice. Confirm deductibility rules with the CRA and a qualified advisor.
+
+---
+
+## 37. Salary / Career Income
+
+```
+=SALARY_PROJECTION(currentSalary, annualRaisePct, years, inflationRate, promoEveryYears, promoBumpPct)
+```
+
+Projects career income year by year with a base annual raise plus optional one-off promotion bumps, in both nominal and today's-dollar terms, with cumulative lifetime earnings.
+
+```
+# 3%/yr raises + a 10% promotion every 5 years, over 30 years:
+=SALARY_PROJECTION(70000, 0.03, 30, 0.025, 5, 0.10)
+```
+
+---
+
+## 38. Mortgage Suite
+
+| Function | Purpose |
+|----------|---------|
+| `MORTGAGE_PAYMENT(principal, annualRate, amortizationYears)` | Monthly payment (Canadian semi-annual compounding) |
+| `MORTGAGE_SCHEDULE(principal, annualRate, amortizationYears, annualPrepayment)` | Year-by-year amortization with optional annual lump-sum prepayment |
+| `MORTGAGE_AFFORDABILITY(grossAnnualIncome, monthlyDebts, annualPropertyTax, monthlyHeat, contractRate, amortizationYears, downPayment)` | Max mortgage & home price under **stress-tested** GDS (39%) / TDS (44%) limits |
+
+The affordability test qualifies you at the higher of **contract rate + 2%** and **5.25%** (the Canadian stress test).
+
+```
+=MORTGAGE_PAYMENT(500000, 0.05, 25)
+=MORTGAGE_AFFORDABILITY(120000, 500, 4000, 150, 0.05, 25, 100000)
+```
+
+---
+
+## 39. Emergency Fund
+
+```
+=EMERGENCY_FUND_PLAN(monthlyEssentialExpenses, monthsOfCoverage, currentSavings, monthlyContribution)
+```
+
+Computes your target fund (essential expenses × months of coverage), the gap versus what you have, and how many months your contribution needs to close it.
+
+---
+
+## 40. Take-Home Pay
+
+```
+=TAKE_HOME_PAY(grossSalary, province)
+```
+
+Approximate annual and monthly net pay after **CPP, EI, and income tax** (2024 rates), with the average deduction rate. Uses the basic personal amount only; Quebec QPP/QPIP are not fully modelled.
+
+---
+
+## 41. Debt Payoff (Avalanche / Snowball)
+
+For a single debt:
+
+```
+=DEBT_PAYOFF_MONTHS(balance, annualRate, monthlyPayment)   # months, years, total interest
+```
+
+For multiple debts, a one-click tab:
+
+1. **Retirement → Setup Debts sheet** creates a **DEBTS** sheet (one debt per row, plus a **Strategy** cell — `Avalanche` or `Snowball` — and an **Extra monthly payment** cell).
+2. **Retirement → Run Debt Payoff** simulates the full payoff, filling in each debt's **payoff order**, **months to payoff**, and **interest paid**.
+
+- **Avalanche** targets the **highest APR** first (least total interest).
+- **Snowball** targets the **smallest balance** first (fastest first win).
+
+As each debt clears, its minimum payment rolls into the next debt (the classic debt-rollup), on top of your extra monthly payment.
 
 ---
 
