@@ -5,10 +5,20 @@ A comprehensive Google Sheets–based retirement planning tool designed specific
 This project provides a Google Apps Script file (`code.gs`) that plugs into a Google Sheet and gives you:
 
 - **RRSP & TFSA** accumulation and decumulation modelling in **real (inflation-adjusted) dollars**
+- **FHSA (First Home Savings Account)** contribution-room estimation
 - **CPP (Canada Pension Plan)** benefit calculator with early/late adjustment factors
 - **OAS (Old Age Security)** calculator with deferral bonuses and clawback calculations
 - **GIS (Guaranteed Income Supplement)** calculator for low-income retirees
 - **RRIF** mandatory minimum withdrawal calculator
+- **Defined-benefit pension** payout projection from plan parameters (now wired into the projection flow)
+- **Couple / household planning** — a two-person projection with per-spouse taxation
+- **RESP / CESG education planner** — year-by-year schedule with grant and lifetime caps
+- **Lifestyle goals** — recurring yearly **trip savings** and full **vehicle planning** (sinking fund, replacement schedule, total cost of ownership)
+- **Big-purchase goals** — a one-click **GOALS sheet** (down payment, renovation, wedding, boat/RV, home systems, lifetime vehicle) that solves the required monthly/annual savings for each
+- **HELOC & Smith Manoeuvre** calculator — converts a mortgage into a tax-deductible investment loan, with capitalize / out-of-pocket / cash-flow-dam toggles
+- **Mortgage suite** — payment, amortization (with prepayments), and stress-tested affordability (GDS/TDS)
+- **Salary / career income** projection with raises and promotions
+- **Take-home pay**, **emergency fund**, and a **debt-payoff tab** (avalanche / snowball)
 - **Tax estimation** for all 13 provinces and territories (2024 brackets)
 - And many more retirement planning functions...
 
@@ -45,6 +55,18 @@ This project provides a Google Apps Script file (`code.gs`) that plugs into a Go
 27. [Retirement Income Summary](#27-retirement-income-summary)
 28. [Function Quick Reference](#28-function-quick-reference)
 29. [Single-Scenario Retirement Workbook Flow](#29-single-scenario-retirement-workbook-flow)
+30. [New Optional Named Ranges](#30-new-optional-named-ranges-single-person-projection)
+31. [Couple / Household Projection](#31-couple--household-projection)
+32. [RESP / CESG Education Planner](#32-resp--cesg-education-planner)
+33. [FHSA Contribution Room](#33-fhsa-contribution-room)
+34. [Lifestyle Goals — Trip Savings & Vehicle Planning](#34-lifestyle-goals--trip-savings--vehicle-planning)
+35. [Big-Purchase Goals & the GOALS Sheet](#35-big-purchase-goals--the-goals-sheet)
+36. [HELOC & Smith Manoeuvre](#36-heloc--smith-manoeuvre)
+37. [Salary / Career Income](#37-salary--career-income)
+38. [Mortgage Suite](#38-mortgage-suite)
+39. [Emergency Fund](#39-emergency-fund)
+40. [Take-Home Pay](#40-take-home-pay)
+41. [Debt Payoff (Avalanche / Snowball)](#41-debt-payoff-avalanche--snowball)
 
 ---
 
@@ -536,6 +558,44 @@ Comprehensive income breakdown at a specific age.
 |----------|---------|----------|
 | `RRSP_CONTRIBUTION_ROOM` | Available RRSP room | Exact formula |
 | `TFSA_CONTRIBUTION_ROOM` | Available TFSA room | Exact (historical limits) |
+| `FHSA_CONTRIBUTION_ROOM` | Available FHSA room | Approximation (carryforward) |
+
+#### Education, Trips & Vehicles
+| Function | Purpose | Accuracy |
+|----------|---------|----------|
+| `RESP_SUGGESTED_CONTRIBUTION` | RESP contribution to hit target | Exact math |
+| `RESP_SCHEDULE` | Year-by-year RESP + CESG schedule | Exact (CESG caps) |
+| `RESP_PROJECTION` | RESP plan summary vs target | Exact math |
+| `TRIP_SAVINGS_REQUIRED` | Annual savings for yearly trips | Exact math |
+| `TRIP_SAVINGS_SCHEDULE` | Trip sinking-fund schedule | Exact math |
+| `TRIP_PLAN` | Repeating trips (any cadence) over a horizon | Exact math |
+| `CAR_SINKING_FUND` | Savings for next vehicle | Exact math |
+| `CAR_REPLACEMENT_SCHEDULE` | When/what each replacement costs | Exact math |
+| `CAR_LIFETIME_FUND` | Fund every replacement over a lifetime | Exact math |
+| `CAR_TOTAL_COST_OF_OWNERSHIP` | Vehicle TCO, annualized | Exact math |
+| `BIG_PURCHASE_FUND` | One-time goal (down payment, reno, wedding…) | Exact math |
+| `RECURRING_EXPENSE_FUND` | Recurring big expense (roof, HVAC, appliances) | Exact math |
+| `HOME_MAINTENANCE_RESERVE` | Reserve as % of home value | Exact math |
+
+#### HELOC & Smith Manoeuvre
+| Function | Purpose | Accuracy |
+|----------|---------|----------|
+| `HELOC_AVAILABLE_CREDIT` | Room under Canadian 65%/80% LTV limits | Exact (CRA/OSFI limits) |
+| `HELOC_INTEREST_ONLY_PAYMENT` | Monthly interest-only HELOC payment | Exact math |
+| `SMITH_MANOEUVRE_SCHEDULE` | Year-by-year mortgage→deductible-loan conversion | Exact math |
+| `SMITH_MANOEUVRE_SUMMARY` | Headline results & years saved | Exact math |
+
+#### Everyday / Life Finance
+| Function | Purpose | Accuracy |
+|----------|---------|----------|
+| `SALARY_PROJECTION` | Career income with raises & promotions | Exact math |
+| `MORTGAGE_PAYMENT` | Monthly mortgage payment | Exact (semi-annual comp.) |
+| `MORTGAGE_SCHEDULE` | Amortization with prepayments | Exact math |
+| `MORTGAGE_AFFORDABILITY` | Max mortgage/price (stress-tested GDS/TDS) | Approximation |
+| `EMERGENCY_FUND_PLAN` | Target fund & months to fund | Exact math |
+| `TAKE_HOME_PAY` | Net pay after CPP/EI/tax | Approximation |
+| `DEBT_PAYOFF_MONTHS` | Single-debt payoff time & interest | Exact math |
+| `runDebtPayoff` (menu) | Avalanche/snowball across all debts | Exact math |
 
 #### Non-Registered Accounts
 | Function | Purpose | Accuracy |
@@ -680,9 +740,11 @@ The projection table appears in the **Calcs** sheet starting at **row 50** (head
 2. **Age** - Your age
 3. **Employment Income** - Income from work (before retirement)
 4. **CPP Income** - CPP benefits (starts at cpp_start_age)
-5. **OAS Income** - OAS benefits (starts at oas_start_age)
-6. **DB Pension** - Defined benefit pension (placeholder for future)
-7. **Other Income** - Other income sources (placeholder for future)
+5. **OAS Income** - OAS benefits (starts at oas_start_age), **net of any OAS clawback**
+6. **DB Pension** - Defined-benefit pension, read from the `db_pension_annual_today` / `db_pension_start_age` named ranges (derive the amount with `=PENSION_INCOME_PROJECTED(...)`)
+7. **Other Income** - Additional streams (rental, annuity, part-time…) pulled from the **OTHER_INCOME** sheet by age
+
+A **Goal Spending** column is also added: big-purchase goals from the [GOALS sheet](#35-big-purchase-goals--the-goals-sheet) draw down the portfolio in the years they occur, so you can see their drag on retirement funding. (Set `include_goals` to FALSE to turn this off.)
 8. **Gross Income** - Total income before tax
 9. **Taxes** - Estimated income tax
 10. **Net Income** - Income after tax
@@ -761,19 +823,21 @@ This aims to provide consistent purchasing power (target_net_income_today) throu
 
 **Current Limitations:**
 - CPP/OAS estimates are simplified (real Service Canada amounts may vary)
-- Tax calculation is approximate (not province-specific, no credits)
-- Assumes one person (no spouse modeling)
-- No RRIF minimum withdrawal enforcement
-- No OAS clawback calculation
-- DB Pension and Other Income columns are placeholders
+- Tax calculation is approximate (inflation-adjusted simple brackets, not province-specific credits)
+- No RRIF minimum withdrawal enforcement in the projection table (the portfolio is modelled as a single pooled balance; use `RRIF_SCHEDULE` / `RRIF_MIN_WITHDRAWAL` separately)
+- OAS clawback uses pre-withdrawal income (avoids a circular dependency) — a documented simplification
+
+**Now supported (previously limitations):**
+- ✅ **Spouse / household modeling** — see [Couple Projection](#couple--household-projection)
+- ✅ **DB pension** wired into the DB Pension column via named ranges
+- ✅ **OAS clawback** applied to OAS income
+- ✅ **OTHER_INCOME sheet** folded into the Other Income column
+- ✅ **Big-purchase goals** (GOALS sheet) draw down the projection portfolio (Goal Spending column)
 
 **Future Enhancements:**
-- Integration with existing `ESTIMATE_TAX()` for province-specific taxes
-- RRIF minimum withdrawals (age 71+)
-- OAS clawback based on income
-- Spouse/family modeling
+- Integration with existing `ESTIMATE_TAX()` for province-specific brackets in the projection
+- RRIF minimum withdrawals (age 71+) enforced inside the projection table
 - Monte Carlo simulation for multiple scenarios
-- Integration with OTHER_INCOME sheet
 
 ### Troubleshooting
 
@@ -794,6 +858,256 @@ This aims to provide consistent purchasing power (target_net_income_today) throu
 - Check that current_age < retirement_age < life_expectancy_age
 - Verify all named ranges have valid numeric values
 - Look for error messages in the toast notification
+
+---
+
+## 30. New Optional Named Ranges (single-person projection)
+
+These are **optional** — leave them out and the projection behaves exactly as before.
+
+| Named Range | Cell (example) | Description |
+|-------------|----------------|-------------|
+| `db_pension_annual_today` | Inputs!B20 | DB pension annual amount (today's $). Derive with `=PENSION_INCOME_PROJECTED(...)` and paste the result here. |
+| `db_pension_start_age` | Inputs!B21 | Age the DB pension starts (defaults to retirement age). |
+| `include_other_income` | Inputs!B22 | TRUE/FALSE — fold the OTHER_INCOME sheet into the projection (default TRUE). |
+| `apply_oas_clawback` | Inputs!B23 | TRUE/FALSE — apply the OAS recovery tax (default TRUE). |
+| `include_goals` | Inputs!B24 | TRUE/FALSE — let GOALS-sheet big purchases draw down the projection portfolio (default TRUE). |
+
+> **Avoid double-counting:** CPP, OAS, and the DB pension are modelled directly. Use the **OTHER_INCOME** sheet only for *additional* streams (rental, annuity, part-time work).
+
+---
+
+## 31. Couple / Household Projection
+
+Run **Retirement → Run Couple Projection** to build a two-person household plan written to a **Calcs_Couple** sheet. Each spouse keeps their own ages, balances, contributions, employment income, CPP/OAS, and DB pension. The key benefit: **tax is computed per person**, and a combined household after-tax target is met by drawing from the **lower-income spouse first** (staying in lower brackets).
+
+### Person 2 named ranges
+
+Person 2 reuses person 1's named ranges with a **`_2` suffix**. Shared/household ranges (`current_year`, `inflation_rate`, `real_return`, `target_net_income_today`) are read **once** without a suffix. Any missing `_2` range falls back to a default, so you only fill in what differs.
+
+| Person 2 Named Range | Description |
+|----------------------|-------------|
+| `current_age_2`, `retirement_age_2`, `life_expectancy_age_2` | Spouse ages |
+| `cpp_start_age_2`, `oas_start_age_2` | Spouse benefit start ages |
+| `current_income_2`, `annual_contrib_2` | Spouse income & contributions |
+| `rrsp_balance_now_2`, `tfsa_balance_now_2`, `taxable_balance_now_2` | Spouse balances |
+| `db_pension_annual_today_2`, `db_pension_start_age_2` | Spouse DB pension |
+| `cpp_contribs_range_2` | (Optional) spouse CPP contribution history |
+
+The **target_net_income_today** range is treated as the **combined household** after-tax spending target.
+
+---
+
+## 32. RESP / CESG Education Planner
+
+Ports the dedicated education-savings logic, including the **20% CESG** grant, its **$500/yr** and **$7,200 lifetime** caps, and the **$50,000 lifetime contribution** limit.
+
+| Function | Purpose |
+|----------|---------|
+| `RESP_SUGGESTED_CONTRIBUTION(beneficiaryAge, ageNeeded, targetCost, targetIsTodaysDollars, currentBalance, annualReturn, inflationRate)` | Level annual contribution (before grant) to hit the education target |
+| `RESP_SCHEDULE(beneficiaryAge, ageNeeded, currentBalance, annualReturn, annualContribution[, startYear])` | Year-by-year table: opening, contribution, CESG, growth, closing |
+| `RESP_PROJECTION(beneficiaryAge, ageNeeded, targetCost, targetIsTodaysDollars, currentBalance, annualReturn, inflationRate, annualContribution)` | Summary: projected vs target, lifetime grant/contributions, status |
+
+```
+=RESP_PROJECTION(2, 18, 120000, TRUE, 5000, 0.055, 0.025, 2500)
+```
+
+---
+
+## 33. FHSA Contribution Room
+
+```
+=FHSA_CONTRIBUTION_ROOM(yearOpened, currentYear, totalContributedToDate)
+```
+
+Models the **$8,000/yr** room accrual, the **$8,000 carryforward cap** (max $16,000 in any single year), and the **$40,000 lifetime** limit.
+
+---
+
+## 34. Lifestyle Goals — Trip Savings & Vehicle Planning
+
+### Trip savings
+
+| Function | Purpose |
+|----------|---------|
+| `TRIP_SAVINGS_REQUIRED(annualTripBudget, costIsTodaysDollars, numYears, currentSavings, annualReturn, inflationRate)` | Level annual savings to fund a **yearly** travel budget |
+| `TRIP_SAVINGS_SCHEDULE(...)` | Year-by-year fund balance, trip cost, contribution, withdrawal |
+| `TRIP_PLAN(tripCost, costIsTodaysDollars, tripIntervalYears, planningYears, firstTripYearsAway, currentSavings, annualReturn, inflationRate)` | **Repeating trips over a long horizon** — yearly *or* on a multi-year cadence (e.g. a big trip every 3 years for 30 years). One steady contribution; fund never goes negative. |
+
+```
+# A $15,000 trip every 3 years for 30 years:
+=TRIP_PLAN(15000, TRUE, 3, 30, 0, 5000, 0.05, 0.025)
+```
+
+### Vehicle planning
+
+| Function | Purpose |
+|----------|---------|
+| `CAR_SINKING_FUND(yearsUntilReplacement, replacementCost, costIsTodaysDollars, currentSavings, annualReturn, inflationRate, tradeInValue)` | Annual & monthly savings for the **next** vehicle, net of trade-in |
+| `CAR_REPLACEMENT_SCHEDULE(currentVehicleAge, replacementIntervalYrs, replacementCost, costIsTodaysDollars, inflationRate, planningYears, tradeInValue)` | **When** each replacement falls due and its **projected cost** |
+| `CAR_LIFETIME_FUND(currentVehicleAge, replacementIntervalYrs, replacementCost, costIsTodaysDollars, currentSavings, annualReturn, inflationRate, planningYears, tradeInValue)` | **One sinking fund that pays for EVERY replacement over a long lifetime** (e.g. a new car every 10 years for 40 years). Returns the required level contribution + a year-by-year fund table. |
+| `CAR_TOTAL_COST_OF_OWNERSHIP(purchasePrice, annualMaintenance, annualInsurance, annualFuelOther, ownershipYears, resaleValue, inflationRate)` | Depreciation + maintenance + insurance + fuel, annualized |
+
+```
+# A new car every 10 years for the next 40 years, net of trade-in:
+=CAR_LIFETIME_FUND(3, 10, 40000, TRUE, 5000, 0.04, 0.025, 40, 8000)
+```
+
+---
+
+## 35. Big-Purchase Goals & the GOALS Sheet
+
+For everything else — **home down payment, renovation, wedding, boat/RV, major home systems (roof, HVAC, appliances)** — there's a one-click backward-funding flow plus generic in-cell functions.
+
+### One-click GOALS sheet
+
+1. **Retirement → Setup Goals sheet** creates a **GOALS** sheet pre-filled with example rows.
+2. Enter your goals (one per row) and **Retirement → Run Lifestyle Goals** fills in the **Required Annual** and **Required Monthly** savings for each, plus a TOTAL row.
+
+| Column | Meaning |
+|--------|---------|
+| Goal | Free-text name |
+| **Type** | `Lump sum`, `Recurring`, or `Vehicle` |
+| Cost / Target | Cost of the purchase / one occurrence |
+| Basis | `Today's $` or `Future $` |
+| Years Until / Veh. Age | Years until the goal (or **current vehicle age** for `Vehicle`) |
+| Interval (yrs) | Years between occurrences (Recurring / Vehicle) |
+| Horizon (yrs) | Planning horizon (Recurring / Vehicle) |
+| Current Saved | Money already earmarked |
+| Return | Expected return (decimal; default 0.04) |
+| Trade-in / Resale | Vehicle trade-in at each replacement |
+| Inflation | Cost inflation (decimal; default 0.025) |
+
+`Lump sum` → one-time goal · `Recurring` → roof/HVAC/appliances/travel on a cadence · `Vehicle` → lifetime replacements net of trade-in.
+
+> **Fed into the projection:** when you run **Run Projection** or **Run Couple Projection**, these goals are subtracted from the portfolio in the years they occur (shown in the **Goal Spending** column), so you see their drag on retirement funding. Goal spending is modelled as a capital outflow (not taxable income) under the pooled-portfolio model. Set the `include_goals` named range to FALSE to exclude them.
+
+### Generic functions (use in any cell)
+
+| Function | Purpose |
+|----------|---------|
+| `BIG_PURCHASE_FUND(targetCost, costIsTodaysDollars, yearsUntil, currentSavings, annualReturn, inflationRate)` | One-time goal: required annual & monthly savings |
+| `RECURRING_EXPENSE_FUND(expenseCost, costIsTodaysDollars, intervalYears, planningYears, firstYearsAway, currentSavings, annualReturn, inflationRate)` | Recurring big expense over a horizon |
+| `HOME_MAINTENANCE_RESERVE(homeValue, annualReservePct, planningYears, currentSavings, annualReturn, inflationRate)` | Build a maintenance reserve as % of (inflating) home value |
+
+```
+=BIG_PURCHASE_FUND(80000, TRUE, 5, 20000, 0.04, 0.025)         # home down payment
+=RECURRING_EXPENSE_FUND(15000, TRUE, 25, 40, 20, 0, 0.04, 0.025)  # roof every 25 yrs
+=HOME_MAINTENANCE_RESERVE(600000, 0.02, 20, 0, 0.04, 0.025)    # 2%/yr reserve
+```
+
+---
+
+## 36. HELOC & Smith Manoeuvre
+
+The **Smith Manoeuvre** is a Canadian strategy that gradually turns a non-deductible mortgage into a **tax-deductible investment loan** using a readvanceable mortgage + HELOC. Each month the principal you pay down frees an equal amount of HELOC credit, which you re-borrow and invest; the HELOC interest is deductible, and the tax refund can be applied back to the mortgage to accelerate it.
+
+### Functions
+
+| Function | Purpose |
+|----------|---------|
+| `HELOC_AVAILABLE_CREDIT(homeValue, mortgageBalance, existingHeloc)` | Available HELOC room under the **65%** standalone / **80%** combined LTV limits |
+| `HELOC_INTEREST_ONLY_PAYMENT(balance, annualRate)` | Monthly interest-only (minimum) HELOC payment |
+| `SMITH_MANOEUVRE_SCHEDULE(mortgageBalance, mortgageRate, amortizationYears, helocRate, investmentReturn, marginalTaxRate, applyRefundToMortgage, projectionYears, interestMethod, dividendYield, dividendUse)` | Year-by-year: mortgage, HELOC, total debt, investments, deductible interest, tax refund, out-of-pocket, net equity |
+| `SMITH_MANOEUVRE_SUMMARY(...)` | Payoff time, years saved, final portfolio/HELOC, net equity, refunds, out-of-pocket |
+
+### Variant toggles
+
+The last three arguments select the variant (all optional):
+
+| Argument | Options | Effect |
+|----------|---------|--------|
+| `interestMethod` | `"Capitalize"` (default) / `"Out-of-pocket"` | Capitalize borrows the HELOC interest (self-funding, HELOC grows); out-of-pocket pays it from cash (HELOC stays flat, tracked as *out-of-pocket interest*) |
+| `dividendYield` | decimal, e.g. `0.02` | Distribution yield used **only** in the cash-flow-dam mode |
+| `dividendUse` | `"Reinvest"` (default) / `"Pay down mortgage"` | Reinvest assumes distributions are already in the return; "Pay down mortgage" is the **cash-flow dam** — distributions accelerate the mortgage, then are re-borrowed and invested |
+
+```
+# Classic self-funding variant:
+=SMITH_MANOEUVRE_SUMMARY(400000, 0.05, 25, 0.065, 0.06, 0.40, TRUE, 25, "Capitalize", 0, "Reinvest")
+# Out-of-pocket interest + cash-flow dam at a 2% yield:
+=SMITH_MANOEUVRE_SUMMARY(400000, 0.05, 25, 0.065, 0.06, 0.40, TRUE, 25, "Out-of-pocket", 0.02, "Pay down mortgage")
+```
+
+### Modelling assumptions
+
+- Fixed mortgage rate uses **Canadian semi-annual compounding** (converted to monthly); HELOC and returns compound monthly.
+- HELOC interest is either **capitalized** (self-funding) or **paid out-of-pocket** — your choice via `interestMethod`.
+- The tax refund on deductible interest is computed yearly and, when `applyRefundToMortgage` is TRUE, applied to the mortgage (which frees more credit to re-borrow and invest — the "accelerator").
+- **Net equity = Investments − HELOC.** It turns positive only when your return comfortably exceeds the HELOC rate, so the result is highly sensitive to that spread.
+
+> ⚠️ The Smith Manoeuvre is a **leveraged investment strategy** — it amplifies both gains and losses and carries interest-rate, investment, and tax risk. This calculator is educational only and is **not** financial, tax, or investment advice. Confirm deductibility rules with the CRA and a qualified advisor.
+
+---
+
+## 37. Salary / Career Income
+
+```
+=SALARY_PROJECTION(currentSalary, annualRaisePct, years, inflationRate, promoEveryYears, promoBumpPct)
+```
+
+Projects career income year by year with a base annual raise plus optional one-off promotion bumps, in both nominal and today's-dollar terms, with cumulative lifetime earnings.
+
+```
+# 3%/yr raises + a 10% promotion every 5 years, over 30 years:
+=SALARY_PROJECTION(70000, 0.03, 30, 0.025, 5, 0.10)
+```
+
+---
+
+## 38. Mortgage Suite
+
+| Function | Purpose |
+|----------|---------|
+| `MORTGAGE_PAYMENT(principal, annualRate, amortizationYears)` | Monthly payment (Canadian semi-annual compounding) |
+| `MORTGAGE_SCHEDULE(principal, annualRate, amortizationYears, annualPrepayment)` | Year-by-year amortization with optional annual lump-sum prepayment |
+| `MORTGAGE_AFFORDABILITY(grossAnnualIncome, monthlyDebts, annualPropertyTax, monthlyHeat, contractRate, amortizationYears, downPayment)` | Max mortgage & home price under **stress-tested** GDS (39%) / TDS (44%) limits |
+
+The affordability test qualifies you at the higher of **contract rate + 2%** and **5.25%** (the Canadian stress test).
+
+```
+=MORTGAGE_PAYMENT(500000, 0.05, 25)
+=MORTGAGE_AFFORDABILITY(120000, 500, 4000, 150, 0.05, 25, 100000)
+```
+
+---
+
+## 39. Emergency Fund
+
+```
+=EMERGENCY_FUND_PLAN(monthlyEssentialExpenses, monthsOfCoverage, currentSavings, monthlyContribution)
+```
+
+Computes your target fund (essential expenses × months of coverage), the gap versus what you have, and how many months your contribution needs to close it.
+
+---
+
+## 40. Take-Home Pay
+
+```
+=TAKE_HOME_PAY(grossSalary, province)
+```
+
+Approximate annual and monthly net pay after **CPP, EI, and income tax** (2024 rates), with the average deduction rate. Uses the basic personal amount only; Quebec QPP/QPIP are not fully modelled.
+
+---
+
+## 41. Debt Payoff (Avalanche / Snowball)
+
+For a single debt:
+
+```
+=DEBT_PAYOFF_MONTHS(balance, annualRate, monthlyPayment)   # months, years, total interest
+```
+
+For multiple debts, a one-click tab:
+
+1. **Retirement → Setup Debts sheet** creates a **DEBTS** sheet (one debt per row, plus a **Strategy** cell — `Avalanche` or `Snowball` — and an **Extra monthly payment** cell).
+2. **Retirement → Run Debt Payoff** simulates the full payoff, filling in each debt's **payoff order**, **months to payoff**, and **interest paid**.
+
+- **Avalanche** targets the **highest APR** first (least total interest).
+- **Snowball** targets the **smallest balance** first (fastest first win).
+
+As each debt clears, its minimum payment rolls into the next debt (the classic debt-rollup), on top of your extra monthly payment.
 
 ---
 
